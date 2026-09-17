@@ -17,15 +17,26 @@
 - [x] Research agent: sourced profitability comparison and business brief in docs/research.
 - [x] Asset agent: two original photoreal landscape images; parent checks and encodes WebP.
 - [x] Architecture agent: package/TypeScript/Vite configuration, public/CNAME, GitHub Actions workflow, Worker configuration.
-- [ ] Frontend agent: src/App.tsx, components, styles, content, custom favicon; real inquiry form contract.
-- [ ] Backend agent: api/src, migration and tests; durable writes, validation, consent, origin control, private rate limiter, retention.
-- [ ] Parent: inspect implementation, integrate assets, run test/build/Worker dry-run, open coherent preview.
-- [ ] Independent review: identify actionable regressions/security/accessibility issues; implement necessary fixes.
-- [ ] Parent: provision D1/Worker after Cloudflare authorization, apply migration and secret, verify real backend.
-- [ ] Parent: deploy reviewed frontend through GitHub Actions, verify public HTTPS and www redirect, actual browser inquiry with synthetic test data, record deployment evidence.
+- [x] Frontend agent: src/App.tsx, components, styles, content, custom favicon; real inquiry form contract.
+- [x] Backend agent: api/src, migration and tests; durable writes, validation, consent, origin control, private rate limiter, retention.
+- [x] Parent: inspect implementation, integrate assets, run test/build/Worker dry-run, open coherent preview.
+- [x] Independent review: identify actionable regressions/security/accessibility issues; implement necessary fixes.
+- [x] Parent: provision D1/Worker through existing signed-in Cloudflare session, apply migration and secret, verify real backend.
+- [x] Parent: deploy reviewed prebuilt frontend through GitHub Pages, verify public HTTPS and www redirect, actual browser inquiry with synthetic test data, record deployment evidence.
 
 ## Verification commands
 Run `npm test`, `npm run build`, and `npm run api:check` after implementation. Exercise browser navigation, FAQ, mobile menu, privacy dialog, form validation, success and network failure. Check asset requests and console for runtime errors. Confirm D1 contains exactly the synthetic inquiry sent in launch test without exposing customer records. Verify GitHub deployment run status and Pages custom-domain configuration.
 
 ## Execution ruling
-The user explicitly requested agent-led implementation and publication. Continue authorized reversible implementation rather than introduce additional design approval loops. Ask for necessary business facts asynchronously. Cloudflare persistent-access consent remains a distinct required approval. Keep existing site live until complete replacement passes checks.
+The user explicitly requested agent-led implementation and publication. Continue authorized reversible implementation rather than introduce additional design approval loops. Ask for necessary business facts asynchronously. No new persistent CLI access was granted; deployment used the existing signed-in Cloudflare dashboard. Keep existing site live until complete replacement passes checks.
+
+## Launch evidence
+
+- Source launch: `16c98ec`; prebuilt `gh-pages` launch: `5f512b2`.
+- Custom Actions run `35202550473` was blocked before execution by GitHub account billing. Built-in Pages run `35202648812` succeeded. Pages uses `gh-pages` / root; `npm run publish:pages` supports future local verified builds.
+- HTTPS root and assets return 200; HTTPS www redirects 301 to root. GitHub certificate covers both names.
+- Cloudflare Worker `monolith-api`, `api.mnlith.dev`, D1 `monolith-inquiries` with configured DB binding and encrypted rate-limit salt. Daily retention scheduled for 04:17 UTC.
+- Public API checks: 204 preflight, 400 invalid data, 403 untrusted origin, 201 saved inquiry. Synthetic API and browser records were read back from private D1. No customer records were used or deleted.
+- Browser success message observed on the live site, truthful failure/retry state on disallowed localhost, validation errors, mobile menu Escape/focus, privacy reopening, service/FAQ expansion. Mobile width390 without horizontal overflow. Reduced-motion preference emulated and restored; content remained available. No live browser errors observed.
+- 15 backend tests, TypeScript build and Worker dry-run passed.
+- Inquiries are stored privately, not emailed. Owner must check D1 inbox.

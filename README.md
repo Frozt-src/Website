@@ -21,7 +21,20 @@ npm run api:check
 
 ## Publish
 
-Changes merged into `main` run `.github/workflows/pages.yml`, build and test, and deploy to GitHub Pages. The repository Pages setting must use GitHub Actions. `public/CNAME` retains `mnlith.dev`, and GitHub enforces HTTPS. Set the repository variable `VITE_API_URL` to `https://api.mnlith.dev`; this is a public service address, never a secret.
+GitHub Pages currently publishes prebuilt files from **`gh-pages` / (root)**. GitHub Actions execution was blocked by account billing during launch, so pushes to `main` do not automatically publish. Source remains on `main`; the built site lives on `gh-pages`.
+
+With Node 24, Git, and an authenticated GitHub CLI account that can push this repository, run:
+
+```sh
+npm ci
+npm run publish:pages
+```
+
+This checks the Pages configuration, runs tests and builds, clones `gh-pages` into a fresh `.deploy/pages-*` directory, replaces only that temporary checkout's site files, commits the result, pushes without force, and requests a Pages build. The checkout remains available for inspection. If another deployment changes `gh-pages` during publication, the push fails safely; rerun the command to build from the latest branch. A queued build is not proof the site is live: verify the GitHub Pages build status and https://mnlith.dev afterward.
+
+`public/CNAME` retains `mnlith.dev`, and GitHub enforces HTTPS. The frontend defaults to `https://api.mnlith.dev`; an optional local `VITE_API_URL` override is a public service address, never a secret.
+
+After resolving account billing, restore workflow deployment by changing the Pages build source to GitHub Actions and enabling the `main` push trigger in `.github/workflows/pages.yml` (currently manual `workflow_dispatch` only). Set repository variable `VITE_API_URL` if overriding the default, then run the workflow and verify the deployed site. Stop using `publish:pages` after switching sources; it intentionally refuses to publish unless Pages still uses `gh-pages` /.
 
 The backend is deployed separately with `npm run api:deploy` after the database migration and `RATE_LIMIT_SECRET` are configured. Do not publish with the placeholder database UUID. See the backend documentation for provisioning and verification.
 

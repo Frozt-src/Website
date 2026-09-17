@@ -10,6 +10,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "publish:pages": "node scripts/publish-pages.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p api/tsconfig.json",
     "test": "node --test api/tests/*.test.ts",
     "test:watch": "node --test --watch api/tests/*.test.ts",
