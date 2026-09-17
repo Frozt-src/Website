@@ -1,0 +1,16 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "monolith-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-17",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "api.mnlith.dev", "custom_domain": true }],
+  "triggers": { "crons": ["17 4 * * *"] },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "monolith-inquiries",
+    "database_id": "3c9cda16-0b31-4496-836d-645607dfa64b",
+    "migrations_dir": "migrations"
+  }]
+}
