@@ -1,6 +1,9 @@
-export interface Env { DB?: D1Database; RATE_LIMIT_SECRET?: string }
+export interface Env { DB?: D1Database; RATE_LIMIT_SECRET?: string; NOTIFY?: SendEmail }
 const origins = new Set(['https://mnlith.dev', 'https://www.mnlith.dev']);
-const services = new Set(['managed-it', 'security', 'cloud', 'automation', 'not-sure']);
+const serviceLabels: Record<string, string> = { 'managed-it':'Managed IT', security:'Security & continuity', cloud:'Cloud & infrastructure', automation:'Automation & development', 'not-sure':'Not sure yet' };
+const services = new Set(Object.keys(serviceLabels));
+// Notifications go only to the owner, from the subdomain onboarded for Cloudflare Email Sending.
+const notifyFrom = 'inquiries@notify.mnlith.dev', notifyTo = 'eldritch@mnlith.dev';
 const teamSizes = new Set(['', '1-10', '11-50', '51-200', '201+']);
 const maxBytes = 16_384;
 // Control characters and bidirectional overrides are never valid; line breaks only in the message.
@@ -58,8 +61,31 @@ function rateLimitSubject(ip: string) {
   const groups = tail === undefined ? left : [...left, ...Array(8 - left.length - right.length).fill('0'), ...right];
   return `${groups.slice(0, 4).map(group => parseInt(group, 16).toString(16)).join(':')}::/64`;
 }
+async function notify(mailer: SendEmail, id: string, receivedAt: number, data: ReturnType<typeof validate>) {
+  try {
+    await mailer.send({
+      from: {name:'Monolith website', email:notifyFrom},
+      to: notifyTo,
+      replyTo: data.email,
+      subject: `New website inquiry: ${serviceLabels[data.service]}`,
+      text: [
+        'A new inquiry was submitted on mnlith.dev. Reply to this email to answer the sender directly.',
+        '',
+        `Name: ${data.name}`,
+        `Email: ${data.email}`,
+        `Company: ${data.company}`,
+        `Service: ${serviceLabels[data.service]}`,
+        `Team size: ${data.teamSize || 'Not given'}`,
+        `Received: ${new Date(receivedAt * 1000).toISOString()}`,
+        `Reference: ${id}`,
+        '',
+        data.message,
+      ].join('\n'),
+    });
+  } catch (error) { logFailure('inquiry_notify_failed', error); }
+}
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const origin = request.headers.get('Origin'), path = new URL(request.url).pathname;
     if (path === '/health' && (request.method === 'GET' || request.method === 'HEAD')) return response(200, request.method === 'HEAD' ? null : {status:'ok'}, origin);
     if (path !== '/inquiries' && path !== '/api/inquiries') return response(404, {error:'Not found.'}, origin);
@@ -96,6 +122,8 @@ export default {
       const stored = await env.DB.prepare(`INSERT INTO inquiries (id, created_at, name, email, company, service, team_size, message, consent_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, now, data.name, data.email, data.company, data.service, data.teamSize, data.message, now).run();
       if (!stored.success || stored.meta.changes !== 1) throw new Error('Storage unavailable');
+      // Notification runs after the response; a failed send never affects the saved inquiry.
+      if (env.NOTIFY) ctx.waitUntil(notify(env.NOTIFY, id, now, data));
       return response(201, {id, status:'saved'}, origin);
     } catch (error) {
       if (error instanceof InputError) return response(error.status, {error:'Please check your inquiry details.'}, origin);

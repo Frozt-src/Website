@@ -1,6 +1,6 @@
 # Monolith inquiry API
 
-Cloudflare Worker with private D1 storage. This API saves inquiries; it does not send email. There is no public read endpoint, admin UI, or delivery SLA.
+Cloudflare Worker with private D1 storage. This API saves inquiries and, once the optional notification binding is configured, emails each one to the owner. There is no public read endpoint, admin UI, or delivery SLA.
 
 ## Contract
 
@@ -58,3 +58,17 @@ Check that the delete's change count matches the count, delete any copies in the
 `node --test api/tests/*.test.ts` (Node 24+) runs request-level tests with native SQLite executing the actual SQL through a small D1 transport adapter. Tests cover validation, exact origins, preflight, content type, streamed size limits, real insertion and returned ID, database failures, concurrent quota consumption, window expiry, retention and CORS aliases. `npx tsc -p api/tsconfig.json --noEmit` checks Worker types. These are local integration tests, not evidence that Cloudflare resources have been deployed.
 
 References: [D1 prepared statements](https://developers.cloudflare.com/d1/worker-api/prepared-statements/), [Cloudflare request headers](https://developers.cloudflare.com/fundamentals/reference/http-headers/).
+
+## Inquiry notifications (off until activated)
+
+When a `send_email` binding named `NOTIFY` exists, each successfully stored inquiry is emailed to eldritch@mnlith.dev from inquiries@notify.mnlith.dev. It's plain text with Reply-To set to the customer and subject "New website inquiry: <service>". Sending runs after the 201 response through `ctx.waitUntil`. A failed send is logged as `inquiry_notify_failed` and never affects the stored inquiry or the response, so D1 stays the system of record. Rate-limited and rejected submissions are never emailed.
+
+To activate (owner, one time):
+
+1. Upgrade Workers to the Paid plan (Cloudflare dashboard → Workers & Pages → Plans). Email Sending to arbitrary recipients isn't available on Free.
+2. Compute → Email Service → Email Sending: onboard the subdomain `notify.mnlith.dev` and let Cloudflare add its DNS records. Do not enable Email Routing on `mnlith.dev` itself, because it would replace the iCloud MX records. Afterwards confirm that `mnlith.dev` still has only the iCloud MX records and exactly one `_dmarc` TXT record.
+3. Add to `api/wrangler.jsonc`:
+   `"send_email": [{ "name": "NOTIFY", "destination_address": "eldritch@mnlith.dev", "allowed_sender_addresses": ["inquiries@notify.mnlith.dev"] }],`
+4. `npm run api:deploy`, submit one labelled test inquiry from https://mnlith.dev, check that the received message shows `dkim=pass` and `dmarc=pass` in its headers, then delete the test row in the D1 console.
+
+Emailed inquiries also live in the mailbox. The privacy notice already covers this ("may also be sent to our business mailbox"). Delete mailbox copies when handling deletion requests.

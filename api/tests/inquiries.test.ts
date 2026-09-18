@@ -165,3 +165,46 @@ test('a failing purge still runs the other purge and fails the invocation', asyn
   assert.equal(sql.prepare('SELECT COUNT(*) n FROM rate_limits').get()?.n, 0);
   sql.close();
 });
+
+function mailer(fail = false) {
+  const sent: any[] = [];
+  return { sent, NOTIFY: { async send(message: any) { if (fail) throw new Error('Email Sending unavailable'); sent.push(message); return {messageId:'test'}; } } };
+}
+function context() {
+  const pending: Promise<unknown>[] = [];
+  return { pending, ctx: { waitUntil(promise: Promise<unknown>) { pending.push(promise); }, passThroughOnException() {} } };
+}
+test('a stored inquiry is emailed to the owner with the customer as reply-to', async () => {
+  const {sql,env} = database(); const {sent,NOTIFY} = mailer(); const {pending,ctx} = context();
+  const result = await worker.fetch(request({...data, teamSize:'11-50'}), {...env, NOTIFY} as any, ctx as any);
+  assert.equal(result.status, 201);
+  const {id} = await result.json() as {id:string};
+  await Promise.all(pending);
+  assert.equal(sent.length, 1);
+  const [message] = sent;
+  assert.deepEqual(message.from, {name:'Monolith website', email:'inquiries@notify.mnlith.dev'});
+  assert.equal(message.to, 'eldritch@mnlith.dev');
+  assert.equal(message.replyTo, 'alex@example.com');
+  assert.equal(message.subject, 'New website inquiry: Managed IT');
+  assert.equal(message.html, undefined);
+  assert.ok(message.text.includes(data.message) && message.text.includes('Team size: 11-50') && message.text.includes(`Reference: ${id}`));
+  sql.close();
+});
+test('a failed notification is logged and never changes the saved response', async (t) => {
+  const logged = t.mock.method(console, 'error', () => {});
+  const {sql,env} = database(); const {NOTIFY} = mailer(true); const {pending,ctx} = context();
+  const result = await worker.fetch(request(), {...env, NOTIFY} as any, ctx as any);
+  assert.equal(result.status, 201);
+  await Promise.all(pending);
+  assert.equal(sql.prepare('SELECT COUNT(*) n FROM inquiries').get()?.n, 1);
+  assert.ok(logged.mock.calls.some(call => JSON.parse(String(call.arguments[0])).event === 'inquiry_notify_failed'));
+  sql.close();
+});
+test('rejected and rate-limited submissions are never emailed', async () => {
+  const {sql,env} = database(); const {sent,NOTIFY} = mailer(); const {pending,ctx} = context();
+  for (let i = 0; i < 6; i++) await worker.fetch(request(), {...env, NOTIFY} as any, ctx as any);
+  await worker.fetch(request({...data, consent:false}), {...env, NOTIFY} as any, ctx as any);
+  await Promise.all(pending);
+  assert.equal(sent.length, 5);
+  sql.close();
+});
