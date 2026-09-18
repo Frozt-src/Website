@@ -7,10 +7,10 @@ Cloudflare Worker with private D1 storage. This API saves inquiries; it does not
 POST `/inquiries` (alias `/api/inquiries`), `Content-Type: application/json` (charset accepted), with Origin exactly `https://mnlith.dev` or `https://www.mnlith.dev`.
 
 ```json
-{"name":"Alex Doe","email":"alex@example.com","company":"Example","service":"managed-it","teamSize":"11–50","message":"We need help improving our systems.","consent":true,"website":""}
+{"name":"Alex Doe","email":"alex@example.com","company":"Example","service":"managed-it","teamSize":"11-50","message":"We need help improving our systems.","consent":true,"website":""}
 ```
 
-Service values: `managed-it`, `security`, `cloud`, `automation`, `not-sure`. `teamSize` and `website` may be omitted. `website` is an empty honeypot, not the company URL. Limits: 16 KiB body, name 120, email 254, company 160, service 40, teamSize 40, message 10–5000 characters. The response is `201 {"id":"UUID","status":"saved"}` only after a successful D1 insert. Frontend must show success only for 201 and must preserve the draft on failure. A 429 means wait an hour; 503 means storage/configuration unavailable. GET `/health` indicates the Worker is running, not that its database is ready.
+Service values: `managed-it`, `security`, `cloud`, `automation`, `not-sure`. `teamSize` must be `1-10`, `11-50`, `51-200`, `201+` or empty. `name`, `email`, `company`, `service` and `teamSize` must be single lines; every field rejects control characters and bidirectional overrides. `teamSize` and `website` may be omitted. `website` is an empty honeypot, not the company URL. Limits: 16 KiB body, name 120, email 254, company 160, service 40, teamSize 40, message 10–5000 characters. The response is `201 {"id":"UUID","status":"saved"}` only after a successful D1 insert. Frontend must show success only for 201 and must preserve the draft on failure. A 429 means wait an hour; 503 means storage/configuration unavailable. GET or HEAD `/health` indicates the Worker is running, not that its database is ready.
 
 ## Required configuration
 
@@ -38,9 +38,20 @@ Check health and preflight. Submit one explicitly labelled deployment test from 
 
 Inquiries contain contact details and consent time. Review them in Cloudflare's authenticated D1 console; secure dashboard access with MFA and least privilege. Establish a human review cadence because no email notification is implemented. Do not paste real inquiry contents into public logs or issue trackers. The scheduled handler removes records older than 90 days from the live database and rate-limit records older than one day. Daily scheduling means deletion can occur up to one day after the 90-day threshold; provider backups may have their own retention. Monitor scheduled execution failures.
 
-Rate limits use HMAC-SHA256 of the Cloudflare-supplied client IP and a secret; raw IP addresses are not stored. One atomic SQLite UPSERT permits five accepted attempts in a one-hour window starting at the first attempt. Failed inserts consume an attempt. Rate counters and inquiries are separate writes: a storage error never produces success. Shared NAT users share the limit. Rotating the secret resets existing IP quotas.
+Rate limits use HMAC-SHA256 of the Cloudflare-supplied client IPv4 address, or of its /64 prefix for IPv6, and a secret; raw IP addresses are not stored. One atomic SQLite UPSERT permits five accepted attempts in a one-hour window starting at the first attempt. Failed inserts consume an attempt. Rate counters and inquiries are separate writes: a storage error never produces success. Shared NAT users share the limit. Rotating the secret resets existing IP quotas.
 
 Origin checking, honeypot and rate limits mitigate ordinary spam; Origin is not authentication and distributed bots can still submit. There is no secret embedded in the frontend. Add a server-verified challenge if observed abuse justifies it. The API never returns inquiry records and never logs request bodies. Cloudflare platform logs/retention must be configured separately.
+
+Workers Logs is enabled with invocation logs off, so only the Worker's own structured failure lines are kept (3 days on Workers Free, 7 on Paid): `inquiry_service_unavailable`, `inquiry_store_failed`, `purge_inquiries_failed`, `purge_rate_limits_failed`. They never contain request bodies, names, email or IP addresses. Review them in Cloudflare → Workers → monolith-api → Logs. A failed purge still runs the other purge and marks the cron invocation as failed.
+
+## Deletion requests
+
+To delete someone's inquiries, run in the D1 console (Storage & databases → D1 → monolith-inquiries → Console), with their address in both places:
+
+    SELECT COUNT(*) FROM inquiries WHERE lower(email) = lower('person@example.com');
+    DELETE FROM inquiries WHERE lower(email) = lower('person@example.com');
+
+Check that the delete's change count matches the count, delete any copies in the business mailbox, and reply to the requester. D1 Time Travel backups keep the deleted rows for up to 7 days (Workers Free) or 30 days (Paid), then they expire. They can't be purged sooner.
 
 ## Verification
 

@@ -125,3 +125,43 @@ test('www origin and API alias save with correct CORS response', async () => {
   assert.equal(result.headers.get('Access-Control-Allow-Origin'),'https://www.mnlith.dev');
   sql.close();
 });
+test('IPv6 clients share one quota per /64 prefix', async () => {
+  const {sql,env} = database();
+  const from = (ip: string) => { const req = request(); req.headers.set('CF-Connecting-IP', ip); return worker.fetch(req, env as any); };
+  for (let i = 1; i <= 5; i++) assert.equal((await from(`2001:db8:1:2::${i}`)).status, 201);
+  assert.equal((await from('2001:0db8:0001:0002:0000:0000:0000:ffff')).status, 429);
+  assert.equal((await from('2001:db8:1:3::1')).status, 201);
+  sql.close();
+});
+test('single-line fields reject breaks, controls and bidi overrides; team size is a known value', async () => {
+  for (const patch of [{name:'Alex\r\nBcc: x@evil.test'}, {company:'Acme\tCo'}, {name:'Alex\u0085'}, {company:'Acme\u202egnp.exe'}, {message:'Hello there \u2066hidden\u2069 text'}, {teamSize:'11–50'}, {teamSize:'lots'}]) {
+    assert.equal((await worker.fetch(request({...data, ...patch}), {})).status, 400);
+  }
+  const {sql,env} = database();
+  assert.equal((await worker.fetch(request({...data, teamSize:'11-50', message:'First line.\nSecond line.'}), env as any)).status, 201);
+  sql.close();
+});
+test('HEAD /health succeeds without a body', async () => {
+  const response = await worker.fetch(new Request('https://api.mnlith.dev/health', {method:'HEAD'}), {});
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), '');
+});
+test('storage failures are logged without personal data', async (t) => {
+  const logged = t.mock.method(console, 'error', () => {});
+  const {sql,env} = database(); sql.exec('DROP TABLE inquiries');
+  assert.equal((await worker.fetch(request(), env as any)).status, 503);
+  const lines = logged.mock.calls.map(call => String(call.arguments[0]));
+  assert.ok(lines.some(line => JSON.parse(line).event === 'inquiry_store_failed'));
+  assert.ok(lines.every(line => !line.includes('alex@example.com') && !line.includes('Alex Doe') && !line.includes('192.0.2.1')));
+  sql.close();
+});
+test('a failing purge still runs the other purge and fails the invocation', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const {sql,env} = database();
+  await worker.fetch(request(), env as any);
+  sql.exec('UPDATE rate_limits SET window_start = 1');
+  sql.exec('DROP TABLE inquiries');
+  await assert.rejects(worker.scheduled({}, env as any));
+  assert.equal(sql.prepare('SELECT COUNT(*) n FROM rate_limits').get()?.n, 0);
+  sql.close();
+});
