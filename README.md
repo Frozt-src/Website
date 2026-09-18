@@ -1,6 +1,6 @@
 # Monolith
 
-The Monolith website at **https://mnlith.dev**. React and TypeScript provide the interface; GitHub Pages hosts the built site. A separate Cloudflare Worker receives consultation inquiries into a private D1 database.
+The Monolith website at **https://mnlith.dev**. React and TypeScript provide the interface. Cloudflare Workers Static Assets serves the built site (Worker `monolith-site`), and a separate Cloudflare Worker (`monolith-api`) receives consultation inquiries into a private D1 database.
 
 ## Work locally
 
@@ -21,26 +21,26 @@ npm run api:check
 
 ## Publish
 
-GitHub Pages currently publishes prebuilt files from **`gh-pages` / (root)**. GitHub Actions execution was blocked by account billing during launch, so pushes to `main` do not automatically publish. Source remains on `main`; the built site lives on `gh-pages`.
+The site is an assets-only Cloudflare Worker named `monolith-site` (`wrangler.jsonc`), serving `dist/` on the Custom Domain `mnlith.dev`. It has no Worker script, so page and asset requests are free and don't count toward Worker request limits. The build writes `dist/_headers` (see `vite.config.ts`). It sets the Content-Security-Policy, HSTS, frame, referrer, permissions and opener headers, plus long-lived caching for hashed `/assets/*`. Unknown paths return `404.html` with status 404. `www.mnlith.dev` redirects to the apex through a Cloudflare Redirect Rule, not code.
 
-With Node 24, Git, and an authenticated GitHub CLI account that can push this repository, run:
+With Node 24 and Wrangler signed in to the Cloudflare account that owns `mnlith.dev` (`npx wrangler login`, then `npx wrangler whoami`):
 
-```sh
-npm ci
-npm run publish:pages
-```
+    npm ci
+    npm run deploy:check   # build + wrangler dry run
+    npm run deploy         # tests, build, deploy
+    npm run verify:site    # checks headers, caching, 404, privacy page and security.txt on https://mnlith.dev
 
-This checks the Pages configuration, runs tests and builds, clones `gh-pages` into a fresh `.deploy/pages-*` directory, replaces only that temporary checkout's site files, commits the result, pushes without force, and requests a Pages build. The checkout remains available for inspection. If another deployment changes `gh-pages` during publication, the push fails safely; rerun the command to build from the latest branch. A queued build is not proof the site is live: verify the GitHub Pages build status and https://mnlith.dev afterward.
+To roll back, check out the previous commit and run `npm run deploy` again. `VITE_API_URL` is an optional public build-time override for the API address, never a secret. The CSP's `connect-src` follows it.
 
-`public/CNAME` retains `mnlith.dev`, and GitHub enforces HTTPS. The frontend defaults to `https://api.mnlith.dev`; an optional local `VITE_API_URL` override is a public service address, never a secret.
+Optional: connect the repository in Cloudflare → Workers & Pages → monolith-site → Settings → Builds (Workers Builds, which works with private repositories). Then pushes to `main` deploy automatically. GitHub Actions isn't used.
 
-After resolving account billing, restore workflow deployment by changing the Pages build source to GitHub Actions and enabling the `main` push trigger in `.github/workflows/pages.yml` (currently manual `workflow_dispatch` only). Set repository variable `VITE_API_URL` if overriding the default, then run the workflow and verify the deployed site. Stop using `publish:pages` after switching sources; it intentionally refuses to publish unless Pages still uses `gh-pages` /.
+The one-time move from GitHub Pages is documented in `docs/cloudflare-cutover.md`.
 
 The backend is deployed separately with `npm run api:deploy` after the database migration and `RATE_LIMIT_SECRET` are configured. Do not publish with the placeholder database UUID. See the backend documentation for provisioning and verification.
 
 ## Receiving inquiries
 
-Website inquiries are stored privately in Cloudflare D1 under `monolith-inquiries`. They are **not automatically emailed**. Open Cloudflare → Storage & databases → D1 → monolith-inquiries → Console to review them with:
+Website inquiries are stored privately in Cloudflare D1 under `monolith-inquiries`. They are emailed to eldritch@mnlith.dev only after the notification binding is activated (see `api/README.md`). Until then, review them in D1. Open Cloudflare → Storage & databases → D1 → monolith-inquiries → Console to review them with:
 
 ```sql
 SELECT id, datetime(created_at, 'unixepoch') AS received_utc,
@@ -59,5 +59,7 @@ There is no public inbox endpoint. The daily scheduled job deletes inquiries old
 - `api/`: Worker source, database schema and tests.
 - `docs/research/`: market research, sources and limits of profitability comparisons.
 - `docs/superpowers/`: design and implementation decisions.
+- `privacy.html`, `404.html`, `src/pages.css`: the privacy notice and not-found pages.
+- `public/.well-known/security.txt`: security contact (renew `Expires` before 2027-09-17).
 
 The original Grym Studios page remains in Git history before the Monolith launch. All iCloud email records remain independent of website hosting.
