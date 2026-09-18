@@ -28,7 +28,7 @@ interface PaymentStateRow {
 }
 interface InvoiceStateRow { status: string; paid_at: number | null }
 interface EventStateRow { stripe_event_id: string; type: string; outcome: string; payment_id: string | null; invoice_id: string | null; payload_json: string }
-interface AuditStateRow { action: string; entity_type: string; entity_id: string; client_id: string | null }
+interface AuditStateRow { action: string; entity_type: string; entity_id: string; client_id: string | null; details_json: string }
 
 function setup() {
   let clock = 1_700_000_000;
@@ -128,12 +128,15 @@ test('startCheckout creates a pending payment, calls the gateway with the invoic
       currency: 'usd',
       invoiceNumber: open.number,
       customerEmail: client.billingEmail,
-      expiresAt: deps.now() + 1800,
+      expiresAt: deps.now() + 1830,
       successUrl,
       cancelUrl,
     },
   );
   assert.equal(stripe.calls[0].idempotencyKey, result.payment.id);
+  // Stripe rejects an expiry under 30 minutes measured by its own clock, so the session we ask for
+  // outlives the one we store. Our reuse window must always close first.
+  assert.equal(stripe.calls[0].expiresAt, (row?.session_expires_at ?? 0) + 30);
 
   const audit = await audits(deps, 'checkout.created');
   assert.equal(audit.length, 1);
@@ -355,6 +358,72 @@ test('a session whose amount does not match the payment is recorded as a mismatc
   assert.equal((await payment(deps, created.id))?.status, 'pending');
   assert.equal((await invoice(deps, open.id))?.status, 'open');
   assert.equal((await audits(deps, 'payment.amount_mismatch')).length, 1);
+});
+
+test('a paid session carrying no amount or currency is a mismatch rather than an unverified payment', async () => {
+  const { deps } = setup();
+  const { invoice: open, payment: created } = await openCheckout(deps);
+
+  const result = await applyStripeEvent(
+    deps.db,
+    deps,
+    checkoutEvent('checkout.session.completed', paidSession(created, { amount_total: undefined, currency: undefined })),
+  );
+
+  assert.equal(result.outcome, 'mismatch');
+  assert.equal((await payment(deps, created.id))?.status, 'pending');
+  assert.equal((await invoice(deps, open.id))?.status, 'open');
+  assert.equal((await audits(deps, 'payment.amount_mismatch')).length, 1);
+});
+
+test('a paid session for an invoice that was voided meanwhile never claims the invoice was paid', async () => {
+  const { deps } = setup();
+  const { invoice: open, payment: created } = await openCheckout(deps);
+  await deps.db.prepare(`UPDATE invoices SET status = 'void' WHERE id = ?`).bind(open.id).run();
+
+  const result = await applyStripeEvent(deps.db, deps, checkoutEvent('checkout.session.completed', paidSession(created)));
+
+  assert.equal(result.outcome, 'applied');
+  assert.equal((await payment(deps, created.id))?.status, 'succeeded');
+  const billed = await invoice(deps, open.id);
+  assert.equal(billed?.status, 'void');
+  assert.equal(billed?.paid_at, null);
+  assert.equal((await audits(deps, 'invoice.paid')).length, 0);
+  const alarm = await audits(deps, 'payment.unexpected_invoice_state');
+  assert.equal(alarm.length, 1);
+  assert.equal(alarm[0].entity_id, created.id);
+  assert.equal(JSON.parse(alarm[0].details_json).invoiceStatus, 'void');
+});
+
+test('a second paying event for the payment that already settled the invoice is not a suspected duplicate', async () => {
+  const { deps } = setup();
+  const { invoice: open, payment: created } = await openCheckout(deps);
+  await applyStripeEvent(deps.db, deps, checkoutEvent('checkout.session.completed', paidSession(created)));
+  const paidAt = (await invoice(deps, open.id))?.paid_at;
+
+  const result = await applyStripeEvent(
+    deps.db,
+    deps,
+    checkoutEvent('checkout.session.async_payment_succeeded', paidSession(created)),
+  );
+
+  assert.equal(result.outcome, 'applied');
+  assert.equal((await payment(deps, created.id))?.status, 'succeeded');
+  assert.equal((await invoice(deps, open.id))?.paid_at, paidAt);
+  assert.equal((await audits(deps, 'payment.duplicate_suspected')).length, 0);
+  assert.equal((await audits(deps, 'invoice.paid')).length, 1);
+});
+
+test('the stored event row keeps the whole Stripe payload', async () => {
+  const { deps } = setup();
+  const { payment: created } = await openCheckout(deps);
+  const event = checkoutEvent('checkout.session.completed', paidSession(created));
+
+  await applyStripeEvent(deps.db, deps, event);
+
+  const stored = await events(deps);
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].payload_json, JSON.stringify(event));
 });
 
 test('a livemode event is ignored while the worker runs in test mode', async () => {

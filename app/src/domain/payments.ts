@@ -6,6 +6,10 @@ import type { Client, Invoice, Payment, PaymentStatus } from './models.ts';
 import type { StripeEvent, StripeGateway } from '../deps.ts';
 
 const sessionLifetimeSeconds = 1800;
+// Stripe refuses an expiry less than 30 minutes ahead of *its* clock when it processes the create
+// call, and our timestamp is already a round trip old by then. Ask Stripe for slightly longer than
+// we store, so our reuse window is the one that closes first.
+const gatewayExpiryCushionSeconds = 30;
 
 const handledTypes = new Set([
   'checkout.session.completed',
@@ -99,7 +103,7 @@ export async function startCheckout(
     customerEmail: input.client.billingEmail,
     successUrl: input.successUrl,
     cancelUrl: input.cancelUrl,
-    expiresAt,
+    expiresAt: expiresAt + gatewayExpiryCushionSeconds,
   });
 
   const row: PaymentRow = {
@@ -192,6 +196,51 @@ async function commit(
   }
 }
 
+// The audit for a paying event follows what the conditional invoice update can actually do: only an
+// open or processing invoice becomes paid. Money landing on any other invoice state is an alarm, and
+// the two alarms are kept apart so the audit trail names the real situation.
+function paidAudit(
+  db: D1Database,
+  at: number,
+  event: StripeEvent,
+  row: PaymentRow & { invoice_status: string },
+): D1PreparedStatement | null {
+  const actor = { occurredAt: at, actorType: 'stripe' as const, actorId: event.id, clientId: row.client_id };
+  if (row.invoice_status === 'open' || row.invoice_status === 'processing') {
+    return auditStatement(db, {
+      ...actor,
+      entityType: 'invoice',
+      entityId: row.invoice_id,
+      action: 'invoice.paid',
+      detailsJson: JSON.stringify({ paymentId: row.id, amountCents: row.amount_cents }),
+    });
+  }
+  if (row.invoice_status === 'paid') {
+    // Another payment settling an already settled bill is money in twice. The payment that settled
+    // it is already succeeded, so a further event about it is just Stripe repeating itself.
+    if (row.status === 'succeeded') return null;
+    return auditStatement(db, {
+      ...actor,
+      entityType: 'payment',
+      entityId: row.id,
+      action: 'payment.duplicate_suspected',
+      detailsJson: JSON.stringify({ invoiceId: row.invoice_id, amountCents: row.amount_cents }),
+    });
+  }
+  // void or draft: the payment succeeds but the bill cannot take it, so somebody has to look.
+  return auditStatement(db, {
+    ...actor,
+    entityType: 'payment',
+    entityId: row.id,
+    action: 'payment.unexpected_invoice_state',
+    detailsJson: JSON.stringify({
+      invoiceId: row.invoice_id,
+      invoiceStatus: row.invoice_status,
+      amountCents: row.amount_cents,
+    }),
+  });
+}
+
 export async function applyStripeEvent(
   db: D1Database,
   deps: { now(): number; stripeMode: 'test' | 'live' },
@@ -220,9 +269,11 @@ export async function applyStripeEvent(
     .first<PaymentRow & { invoice_status: string }>();
   if (!row) return commit(db, event, [eventStatement('unmatched', null, null)], 'unmatched');
 
+  // The amount is verified against the payment row, never taken from the event. A session that does
+  // not state its amount and currency cannot be verified, so it counts as a mismatch.
   const amountTotal = typeof session.amount_total === 'number' ? session.amount_total : null;
   const currency = typeof session.currency === 'string' ? session.currency.toLowerCase() : null;
-  if ((amountTotal !== null && amountTotal !== row.amount_cents) || (currency !== null && currency !== row.currency)) {
+  if (amountTotal !== row.amount_cents || currency !== row.currency) {
     return commit(
       db,
       event,
@@ -265,29 +316,9 @@ export async function applyStripeEvent(
       db
         .prepare(`UPDATE invoices SET status = 'paid', paid_at = ?, updated_at = ? WHERE id = ? AND status IN ('open', 'processing')`)
         .bind(at, at, row.invoice_id),
-      // A session paying an invoice that is already paid is money in for a bill that was settled.
-      row.invoice_status === 'paid'
-        ? auditStatement(db, {
-            occurredAt: at,
-            actorType: 'stripe',
-            actorId: event.id,
-            clientId: row.client_id,
-            entityType: 'payment',
-            entityId: row.id,
-            action: 'payment.duplicate_suspected',
-            detailsJson: JSON.stringify({ invoiceId: row.invoice_id, amountCents: row.amount_cents }),
-          })
-        : auditStatement(db, {
-            occurredAt: at,
-            actorType: 'stripe',
-            actorId: event.id,
-            clientId: row.client_id,
-            entityType: 'invoice',
-            entityId: row.invoice_id,
-            action: 'invoice.paid',
-            detailsJson: JSON.stringify({ paymentId: row.id, amountCents: row.amount_cents }),
-          }),
     );
+    const audit = paidAudit(db, at, event, row);
+    if (audit) statements.push(audit);
   } else if (event.type === 'checkout.session.completed') {
     // Checkout finished but the money has not settled yet, e.g. an ACH debit.
     statements.push(
