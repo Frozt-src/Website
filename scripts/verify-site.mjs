@@ -22,7 +22,13 @@ check(Boolean(script), 'index.html references a hashed /assets/ script');
 if (script) check((await get(script)).headers.get('cache-control') === 'public, max-age=31536000, immutable', `${script} is cached as immutable`);
 const missing = await get('/this-page-does-not-exist');
 check(missing.status === 404, `unknown path returns 404 (got ${missing.status})`);
+check((await missing.text()).includes('Page not found'), 'the 404 page is served');
 check(missing.headers.get('content-security-policy') === expected['content-security-policy'], 'the 404 response carries the CSP');
+
+const privacy = await get('/privacy');
+check(privacy.status === 200 && (await privacy.text()).includes('Privacy notice'), '/privacy returns the privacy notice');
+const securityTxt = await get('/.well-known/security.txt');
+check(securityTxt.status === 200 && (await securityTxt.text()).includes('Contact: mailto:eldritch@mnlith.dev'), '/.well-known/security.txt is published');
 
 if (failures.length) { console.error(`\n${failures.length} check(s) failed.`); process.exit(1); }
 console.log('\nAll checks passed.');

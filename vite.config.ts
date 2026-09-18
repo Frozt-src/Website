@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv } from 'vite';
 import type { Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -44,6 +45,16 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react(), securityHeaders(apiOrigin)],
     base: '/',
-    build: { target: 'es2022', sourcemap: false },
+    build: {
+      target: 'es2022',
+      sourcemap: false,
+      rolldownOptions: {
+        input: {
+          main: fileURLToPath(new URL('./index.html', import.meta.url)),
+          privacy: fileURLToPath(new URL('./privacy.html', import.meta.url)),
+          notFound: fileURLToPath(new URL('./404.html', import.meta.url)),
+        },
+      },
+    },
   };
 });
