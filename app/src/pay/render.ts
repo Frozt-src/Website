@@ -16,12 +16,20 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
+// Built from three single-purpose formatters (rather than one Intl.DateTimeFormat with day/month/
+// year options) because locale option order does not control output order: en-US's own default
+// order is "Sep 18, 2026", not the "18 Sep 2026" this host renders everywhere.
+const dayFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', day: 'numeric' });
+const monthFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short' });
+const yearFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric' });
+
 function formatDate(unixSeconds: number): string {
-  return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
+  const date = new Date(unixSeconds * 1000);
+  return `${dayFormatter.format(date)} ${monthFormatter.format(date)} ${yearFormatter.format(date)}`;
 }
 
 function wordmark(): string {
-  return '<div class="wordmark">MONOLITH</div>';
+  return '<header class="wordmark">MONOLITH</header>';
 }
 
 function footer(year: number): string {
@@ -35,6 +43,7 @@ export function layout(input: { title: string; body: string }): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#101314">
 <title>${escapeHtml(input.title)}</title>
 <link rel="stylesheet" href="/pay.css">
 <link rel="icon" href="/favicon.svg">
@@ -65,7 +74,8 @@ export function invoicePage(input: InvoicePageInput): string {
 <h1>Invoice ${escapeHtml(invoice.number)}</h1>
 <p class="description">${escapeHtml(invoice.description)}</p>
 <table>
-<thead><tr><th>Description</th><th>Qty</th><th>Amount</th></tr></thead>
+<caption class="visually-hidden">Invoice line items</caption>
+<thead><tr><th scope="col">Description</th><th scope="col">Qty</th><th scope="col">Amount</th></tr></thead>
 <tbody>${rows}</tbody>
 </table>
 <p class="amount-due"><span>Amount due</span><strong>${formatUsd(invoice.totalCents)}</strong></p>
@@ -108,7 +118,7 @@ export function processingPage(input: ProcessingPageInput): string {
 <main>
 <h1>Invoice ${escapeHtml(invoice.number)}</h1>
 <p class="status">Payment processing</p>
-<p>We're processing your bank payment (ACH). This can take a few business days; no action is needed.</p>
+<p>We’re processing your bank payment (ACH). This can take a few business days; no action is needed.</p>
 </main>
 ${footer(year)}`;
   return layout({ title: `Invoice ${invoice.number}`, body });
@@ -137,7 +147,7 @@ export function completePage(input: CompletePageInput): string {
     message = 'Your bank payment is processing. This can take a few business days.';
   } else {
     title = 'Confirming your payment';
-    message = "We're confirming your payment. This can take a minute; you can safely close this page.";
+    message = 'We’re confirming your payment. This can take a minute; you can safely close this page.';
   }
   const body = `${wordmark()}
 <main>
@@ -163,16 +173,21 @@ ${footer(input.year)}`;
 }
 
 export function notFoundPage(): string {
-  const body = `<main>
+  const body = `${wordmark()}
+<main>
 <h1>Page not found</h1>
+<p>This payment link is no longer valid.</p>
+<p>Questions? Email <a href="mailto:eldritch@mnlith.dev">eldritch@mnlith.dev</a>.</p>
 </main>`;
   return layout({ title: 'Page not found', body });
 }
 
 export function unavailablePage(): string {
-  const body = `<main>
+  const body = `${wordmark()}
+<main>
 <h1>Payments are not available right now</h1>
-<p>Please try again later.</p>
+<p>Please try again in a few minutes.</p>
+<p>Questions? Email <a href="mailto:eldritch@mnlith.dev">eldritch@mnlith.dev</a>.</p>
 </main>`;
   return layout({ title: 'Payments unavailable', body });
 }

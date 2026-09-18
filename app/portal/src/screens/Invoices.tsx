@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useApi } from '../auth';
-import { formatDate, formatMoney, navigate } from '../api';
+import { formatDate, formatMoney } from '../api';
 import type { InvoiceStatus, InvoiceSummary } from '../api';
+import Link from '../Link';
 
 const statusLabel: Record<InvoiceStatus, string> = {
   draft: 'Draft',
@@ -34,9 +35,21 @@ export default function Invoices() {
   return (
     <section className="portal-section" aria-labelledby="invoices-title">
       <h1 id="invoices-title">Invoices</h1>
-      {error && <p className="portal-error">{error}</p>}
-      {!error && !invoices && <p className="portal-meta">Loading…</p>}
-      {invoices && invoices.length === 0 && <p className="portal-meta">No invoices yet.</p>}
+      {error && (
+        <p className="portal-error" role="alert">
+          {error}
+        </p>
+      )}
+      {!error && !invoices && (
+        <p className="portal-meta" role="status">
+          Loading…
+        </p>
+      )}
+      {invoices && invoices.length === 0 && (
+        <p className="portal-meta" role="status">
+          No invoices yet.
+        </p>
+      )}
       {invoices && invoices.length > 0 && (
         <table className="portal-table">
           <thead>
@@ -50,21 +63,13 @@ export default function Invoices() {
           <tbody>
             {invoices.map(invoice => (
               <tr key={invoice.id}>
-                <td>
-                  <a
-                    href={`/invoices/${invoice.id}`}
-                    onClick={event => {
-                      event.preventDefault();
-                      navigate(`/invoices/${invoice.id}`);
-                    }}
-                  >
-                    {invoice.number}
-                  </a>
+                <td className="portal-nowrap">
+                  <Link href={`/invoices/${invoice.id}`}>{invoice.number}</Link>
                 </td>
                 <td>
                   <span className={`portal-status portal-status-${invoice.status}`}>{statusLabel[invoice.status]}</span>
                 </td>
-                <td>{formatMoney(invoice.totalCents, invoice.currency)}</td>
+                <td className="portal-money">{formatMoney(invoice.totalCents, invoice.currency)}</td>
                 <td>{formatDate(invoice.dueAt)}</td>
               </tr>
             ))}

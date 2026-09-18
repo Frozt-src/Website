@@ -138,7 +138,7 @@ test('an open invoice page shows the wordmark, number, description, items, amoun
   const response = await app.fetch(new Request(payUrl(`/i/${token}`)));
   const body = await response.text();
 
-  assert.match(body, /MONOLITH/);
+  assert.match(body, /<header class="wordmark">MONOLITH<\/header>/);
   assert.match(body, new RegExp(`Invoice ${invoice.number}`));
   assert.match(body, /Managed services, September/);
   assert.match(body, /Server maintenance/);
@@ -312,7 +312,7 @@ test('the complete page shows Payment received with the invoice number, amount a
   assert.match(body, /Payment received/);
   assert.match(body, new RegExp(invoice.number));
   assert.match(body, /\$100\.00/);
-  assert.match(body, /2023-11-14/);
+  assert.match(body, /14 Nov 2023/);
 });
 
 test('the complete page mentions processing for a processing invoice', async () => {

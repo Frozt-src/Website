@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
 import { SignedIn, SignedOut, SignIn, UserButton } from '@clerk/clerk-react';
 import { useApi } from './auth';
-import { ApiError, isPreviewMode, navigate } from './api';
+import { ApiError, isPreviewMode } from './api';
 import type { MeResponse } from './api';
+import Link from './Link';
 import Overview from './screens/Overview';
 import Invoices from './screens/Invoices';
 import InvoiceDetail from './screens/InvoiceDetail';
@@ -14,14 +14,24 @@ type Route =
   | { name: 'overview' }
   | { name: 'invoices' }
   | { name: 'invoice'; id: string }
-  | { name: 'services' };
+  | { name: 'services' }
+  | { name: 'not-found' };
+
+const routeTitle: Record<Route['name'], string> = {
+  overview: 'Overview',
+  invoices: 'Invoices',
+  invoice: 'Invoice',
+  services: 'Services',
+  'not-found': 'Page not found',
+};
 
 function parseRoute(pathname: string): Route {
   const parts = pathname.split('/').filter(Boolean);
+  if (parts.length === 0) return { name: 'overview' };
+  if (parts[0] === 'invoices' && parts.length === 1) return { name: 'invoices' };
   if (parts[0] === 'invoices' && parts.length === 2) return { name: 'invoice', id: parts[1] };
-  if (parts[0] === 'invoices') return { name: 'invoices' };
-  if (parts[0] === 'services') return { name: 'services' };
-  return { name: 'overview' };
+  if (parts[0] === 'services' && parts.length === 1) return { name: 'services' };
+  return { name: 'not-found' };
 }
 
 function useRoute(): Route {
@@ -34,34 +44,32 @@ function useRoute(): Route {
   return route;
 }
 
-function NavLink({ href, children }: { href: string; children: ReactNode }) {
-  return (
-    <a
-      href={href}
-      onClick={event => {
-        event.preventDefault();
-        navigate(href);
-      }}
-    >
-      {children}
-    </a>
-  );
-}
-
 function Header() {
   return (
     <header className="portal-header">
-      <NavLink href="/">
+      <Link href="/" className="portal-header-brand">
         <span className="portal-wordmark">MONOLITH</span>
         <span className="portal-tag">Portal</span>
-      </NavLink>
+      </Link>
       <nav className="portal-nav" aria-label="Portal navigation">
-        <NavLink href="/invoices">Invoices</NavLink>
-        <NavLink href="/services">Services</NavLink>
+        <Link href="/invoices">Invoices</Link>
+        <Link href="/services">Services</Link>
       </nav>
       {/* Clerk's UserButton requires a mounted ClerkProvider, which preview mode never has. */}
       {!isPreviewMode() && <UserButton />}
     </header>
+  );
+}
+
+function NotFound() {
+  return (
+    <section className="portal-section" aria-labelledby="not-found-title">
+      <h1 id="not-found-title">Page not found</h1>
+      <p className="portal-meta">We couldn’t find that page.</p>
+      <Link href="/" className="portal-button">
+        Go home
+      </Link>
+    </section>
   );
 }
 
@@ -95,18 +103,51 @@ function AuthenticatedApp() {
 
   useEffect(() => loadMe(), [loadMe]);
 
-  if (noAccount) return <NoAccount />;
+  // Announce each route change to assistive tech and keyboard users, the way a full page
+  // navigation would: update the tab title, move focus to the new screen's heading, reset scroll.
+  // Keyed on `me` too so this also fires once the very first screen finishes loading, not just on
+  // later route changes.
+  useEffect(() => {
+    if (!me) return;
+    document.title = `${routeTitle[route.name]} — Monolith Portal`;
+    window.scrollTo(0, 0);
+    const heading = document.querySelector<HTMLElement>('main h1');
+    if (heading) {
+      heading.setAttribute('tabindex', '-1');
+      heading.focus();
+    }
+  }, [route, me]);
+
+  if (noAccount) {
+    return (
+      <>
+        <Header />
+        <NoAccount />
+      </>
+    );
+  }
   if (loadError) {
     return (
-      <main className="portal-main portal-notice">
-        <p className="portal-error">{loadError}</p>
-      </main>
+      <>
+        <Header />
+        <main className="portal-main portal-notice">
+          <h1>Something went wrong</h1>
+          <p className="portal-error" role="alert">
+            {loadError}
+          </p>
+          <button type="button" className="portal-button" onClick={() => loadMe()}>
+            Try again
+          </button>
+        </main>
+      </>
     );
   }
   if (!me) {
     return (
       <main className="portal-main portal-notice">
-        <p className="portal-meta">Loading…</p>
+        <p className="portal-meta" role="status">
+          Loading…
+        </p>
       </main>
     );
   }
@@ -119,6 +160,7 @@ function AuthenticatedApp() {
         {route.name === 'invoices' && <Invoices />}
         {route.name === 'invoice' && <InvoiceDetail id={route.id} />}
         {route.name === 'services' && <Services />}
+        {route.name === 'not-found' && <NotFound />}
       </main>
     </>
   );

@@ -47,7 +47,20 @@ button {
   border: none;
   cursor: pointer;
 }
+button:hover { background: #fff; }
+button:active { background: #d5e7ec; }
 .note { color: #a1aaad; font-size: 14px; text-align: center; margin: 0; }
 .status { font-size: 16px; color: #a1aaad; margin: 0 0 8px; }
 .footer { color: #a1aaad; font-size: 12px; text-align: center; padding: 24px 20px; }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 `;

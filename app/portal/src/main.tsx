@@ -5,13 +5,58 @@ import App from './App';
 import { ApiContext, AuthApiProvider } from './auth';
 import './portal.css';
 
+// A minimal header for the two screens that can render before Clerk is ever configured — no nav,
+// no UserButton, since there is no session and no ClerkProvider ancestor to support either.
+function BootstrapHeader() {
+  return (
+    <header className="portal-header">
+      <span className="portal-header-brand">
+        <span className="portal-wordmark">MONOLITH</span>
+        <span className="portal-tag">Portal</span>
+      </span>
+    </header>
+  );
+}
+
 function NotConfigured() {
   return (
-    <main className="portal-main portal-notice">
-      <h1>Portal is not configured</h1>
-      <p>Sign-in is not available yet. Please check back later.</p>
-    </main>
+    <>
+      <BootstrapHeader />
+      <main className="portal-main portal-notice">
+        <h1>Portal is not configured</h1>
+        <p role="status">Sign-in is not available yet. Please check back later.</p>
+      </main>
+    </>
   );
+}
+
+function CouldNotReach({ onRetry }: { onRetry: () => void }) {
+  return (
+    <>
+      <BootstrapHeader />
+      <main className="portal-main portal-notice">
+        <h1>Couldn’t reach the portal</h1>
+        <p role="alert">Check your connection and try again.</p>
+        <button type="button" className="portal-button" onClick={onRetry}>
+          Retry
+        </button>
+      </main>
+    </>
+  );
+}
+
+// Distinguishes a genuinely empty publishable key (portal not configured) from a fetch that never
+// got an answer (offline, DNS failure, a 5xx) — the two need different screens and only the latter
+// gets a retry.
+async function loadClerkKey(): Promise<{ ok: true; key: string } | { ok: false }> {
+  try {
+    const response = await fetch('/api/public-config');
+    if (!response.ok) return { ok: false };
+    const config = (await response.json()) as { clerkPublishableKey?: string };
+    return { ok: true, key: config.clerkPublishableKey ?? '' };
+  } catch {
+    return { ok: false };
+  }
 }
 
 async function bootstrap(): Promise<void> {
@@ -35,35 +80,37 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
-  let clerkPublishableKey = '';
-  try {
-    const response = await fetch('/api/public-config');
-    if (response.ok) {
-      const config = (await response.json()) as { clerkPublishableKey?: string };
-      clerkPublishableKey = config.clerkPublishableKey ?? '';
+  // Re-run on Retry: renders into the same root, so a Retry click never re-creates it.
+  const attempt = async (): Promise<void> => {
+    const result = await loadClerkKey();
+    if (!result.ok) {
+      root.render(
+        <StrictMode>
+          <CouldNotReach onRetry={() => void attempt()} />
+        </StrictMode>,
+      );
+      return;
     }
-  } catch {
-    clerkPublishableKey = '';
-  }
-
-  if (!clerkPublishableKey) {
+    if (!result.key) {
+      root.render(
+        <StrictMode>
+          <NotConfigured />
+        </StrictMode>,
+      );
+      return;
+    }
     root.render(
       <StrictMode>
-        <NotConfigured />
+        <ClerkProvider publishableKey={result.key} afterSignOutUrl="/">
+          <AuthApiProvider>
+            <App />
+          </AuthApiProvider>
+        </ClerkProvider>
       </StrictMode>,
     );
-    return;
-  }
+  };
 
-  root.render(
-    <StrictMode>
-      <ClerkProvider publishableKey={clerkPublishableKey} afterSignOutUrl="/">
-        <AuthApiProvider>
-          <App />
-        </AuthApiProvider>
-      </ClerkProvider>
-    </StrictMode>,
-  );
+  await attempt();
 }
 
 void bootstrap();
