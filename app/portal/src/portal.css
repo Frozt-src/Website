@@ -1,0 +1,126 @@
+@import '@fontsource/space-grotesk/latin-500.css';
+@import '@fontsource/manrope/latin-400.css';
+@import '@fontsource/manrope/latin-600.css';
+
+:root {
+  --bg: #101314;
+  --fg: #edf1f2;
+  --muted: #a1aaad;
+  --line: rgba(220, 232, 237, .16);
+  --display: 'Space Grotesk', sans-serif;
+  color-scheme: dark;
+  font-synthesis: none;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root { min-height: 100%; }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'Manrope', sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+a { color: inherit; text-decoration: none; }
+a:hover { color: var(--muted); }
+a:focus-visible, button:focus-visible, input:focus-visible {
+  outline: 2px solid #d5e7ec;
+  outline-offset: 4px;
+}
+
+button { font: inherit; color: inherit; cursor: pointer; }
+button:disabled { cursor: wait; opacity: .6; }
+
+h1, h2 { font-family: var(--display); font-weight: 500; margin: 0 0 12px; letter-spacing: -.02em; }
+h1 { font-size: clamp(26px, 4vw, 36px); }
+h2 { font-size: 18px; margin-top: 32px; }
+p { margin: 0 0 12px; }
+
+.portal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px 32px;
+  border-bottom: 1px solid var(--line);
+}
+.portal-header a[href="/"] { display: inline-flex; align-items: baseline; gap: 10px; }
+.portal-wordmark { font-family: var(--display); font-weight: 500; font-size: 15px; letter-spacing: .2em; }
+.portal-tag { font-size: 12px; color: var(--muted); }
+.portal-nav { display: flex; gap: 24px; font-size: 13px; }
+
+.portal-main { width: min(760px, calc(100% - 48px)); margin-inline: auto; padding-block: 40px 64px; }
+.portal-main.portal-signin,
+.portal-main.portal-notice {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 4px;
+}
+
+.portal-meta { color: var(--muted); font-size: 13px; }
+.portal-eyebrow { font-size: 11px; letter-spacing: .14em; color: var(--muted); text-transform: uppercase; margin: 0 0 6px; }
+
+.portal-card { border: 1px solid var(--line); padding: 24px; margin: 20px 0; }
+.portal-balance { font-family: var(--display); font-size: 32px; margin: 0 0 16px; }
+
+.portal-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 18px;
+  min-height: 44px;
+  background: var(--fg);
+  color: var(--bg);
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background .2s, transform .2s;
+}
+.portal-button:hover:not(:disabled) { background: #fff; }
+.portal-button-secondary {
+  background: transparent;
+  color: var(--fg);
+  border-color: var(--line);
+  margin-bottom: 16px;
+}
+.portal-button-secondary:hover:not(:disabled) { border-color: var(--muted); background: transparent; }
+
+.portal-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+.portal-table th, .portal-table td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); }
+.portal-table th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+
+.portal-status {
+  display: inline-block;
+  padding: 3px 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  border: 1px solid var(--line);
+}
+.portal-status-open { color: #dce8ee; }
+.portal-status-processing { color: #e8d7a1; }
+.portal-status-paid { color: #a8e0b8; }
+.portal-status-void, .portal-status-draft { color: var(--muted); }
+
+.portal-total { font-family: var(--display); font-size: 18px; margin: 16px 0; }
+.portal-notice-banner { border: 1px solid var(--line); background: #1c2a28; padding: 14px; font-size: 13px; }
+.portal-error { color: #efb9af; font-size: 13px; }
+
+.portal-list { list-style: none; margin: 16px 0; padding: 0; display: flex; flex-direction: column; gap: 16px; }
+.portal-list-item { border: 1px solid var(--line); padding: 16px; }
+.portal-list-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-weight: 600; margin-bottom: 6px; }
+
+@media (max-width: 480px) {
+  .portal-header { padding: 16px 20px; flex-wrap: wrap; row-gap: 12px; }
+  .portal-nav { gap: 16px; }
+}
