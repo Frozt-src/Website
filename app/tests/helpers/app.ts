@@ -43,6 +43,8 @@ export class FakeClerkUsers implements ClerkUsers {
 export class FakeStripe implements StripeGateway {
   calls: CheckoutSessionInput[] = [];
   expired: string[] = [];
+  // Stripe refuses to expire a session that has already completed. Tests flip this to exercise that.
+  expireShouldThrow = false;
   private counter = 0;
   async createCheckoutSession(input: CheckoutSessionInput): Promise<{ id: string; url: string }> {
     this.calls.push(input);
@@ -52,6 +54,7 @@ export class FakeStripe implements StripeGateway {
     return { id, url: `https://checkout.stripe.com/c/pay/${id}` };
   }
   async expireCheckoutSession(sessionId: string): Promise<void> {
+    if (this.expireShouldThrow) throw new Error('stripe refused to expire the session');
     this.expired.push(sessionId);
   }
 }

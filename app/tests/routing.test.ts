@@ -48,6 +48,19 @@ test('portal public-config exposes the publishable key', async () => {
   assert.deepEqual(await response.json(), { clerkPublishableKey: 'pk_test_fake' });
 });
 
+test('portal public-config is never cacheable', async () => {
+  const app = createApp(testDeps());
+  const response = await app.fetch(new Request(portalUrl('/api/public-config')));
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+});
+
+test('the reserved stripe webhook 404 on the portal host is never cacheable', async () => {
+  const app = createApp(testDeps());
+  const response = await app.fetch(new Request(portalUrl('/api/stripe/webhook'), { method: 'POST' }));
+  assert.equal(response.status, 404);
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+});
+
 test('portal serves static assets for non-api paths', async () => {
   const assetBody = 'portal shell';
   const assets = { fetch: async () => new Response(assetBody, { status: 200 }) };

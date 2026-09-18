@@ -154,26 +154,28 @@ export default function InvoiceDetail({ id }: { id: string }) {
         </p>
       )}
 
-      <table className="portal-table">
-        <thead>
-          <tr>
-            <th scope="col">Item</th>
-            <th scope="col">Qty</th>
-            <th scope="col">Unit</th>
-            <th scope="col">Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          {invoice.items.map(item => (
-            <tr key={item.id}>
-              <td>{item.description}</td>
-              <td>{item.quantity}</td>
-              <td className="portal-money">{formatMoney(item.unitCents, invoice.currency)}</td>
-              <td className="portal-money">{formatMoney(item.amountCents, invoice.currency)}</td>
+      <div className="portal-table-wrap">
+        <table className="portal-table">
+          <thead>
+            <tr>
+              <th scope="col">Item</th>
+              <th scope="col">Qty</th>
+              <th scope="col">Unit</th>
+              <th scope="col">Amount</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {invoice.items.map(item => (
+              <tr key={item.id}>
+                <td>{item.description}</td>
+                <td>{item.quantity}</td>
+                <td className="portal-money">{formatMoney(item.unitCents, invoice.currency)}</td>
+                <td className="portal-money">{formatMoney(item.amountCents, invoice.currency)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <p className="portal-total">Total: {formatMoney(invoice.totalCents, invoice.currency)}</p>
 
       {showPayButton && (
@@ -190,26 +192,28 @@ export default function InvoiceDetail({ id }: { id: string }) {
       {invoice.payments.length > 0 && (
         <>
           <h2>Payments</h2>
-          <table className="portal-table">
-            <thead>
-              <tr>
-                <th scope="col">Status</th>
-                <th scope="col">Method</th>
-                <th scope="col">Amount</th>
-                <th scope="col">Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {invoice.payments.map(payment => (
-                <tr key={payment.id}>
-                  <td>{paymentStatusLabel[payment.status]}</td>
-                  <td>{payment.method ? (methodLabel[payment.method] ?? payment.method) : '—'}</td>
-                  <td className="portal-money">{formatMoney(payment.amountCents, invoice.currency)}</td>
-                  <td>{formatDate(payment.succeededAt ?? payment.createdAt)}</td>
+          <div className="portal-table-wrap">
+            <table className="portal-table">
+              <thead>
+                <tr>
+                  <th scope="col">Status</th>
+                  <th scope="col">Method</th>
+                  <th scope="col">Amount</th>
+                  <th scope="col">Date</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {invoice.payments.map(payment => (
+                  <tr key={payment.id}>
+                    <td>{paymentStatusLabel[payment.status]}</td>
+                    <td>{payment.method ? (methodLabel[payment.method] ?? payment.method) : '—'}</td>
+                    <td className="portal-money">{formatMoney(payment.amountCents, invoice.currency)}</td>
+                    <td>{formatDate(payment.succeededAt ?? payment.createdAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
     </section>

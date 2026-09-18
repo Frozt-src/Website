@@ -103,7 +103,10 @@ p { margin: 0 0 12px; }
 }
 .portal-button-secondary:hover:not(:disabled) { border-color: var(--fg); background: transparent; }
 
-.portal-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 16px; }
+/* A 4-column table is wider than a 375px viewport; scope the scroll to the table itself so it never
+   forces the whole page to scroll horizontally. */
+.portal-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 16px 0; }
+.portal-table { width: 100%; border-collapse: collapse; margin: 0; font-size: 16px; }
 .portal-table th, .portal-table td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); }
 .portal-table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
 .portal-money { font-variant-numeric: tabular-nums; }

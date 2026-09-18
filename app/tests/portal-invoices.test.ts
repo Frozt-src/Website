@@ -5,6 +5,7 @@ import { createApp } from '../src/app.ts';
 import { newId } from '../src/domain/ids.ts';
 import { testDeps, portalUrl, FakeSessions, FakeClerkUsers, FakeStripe } from './helpers/app.ts';
 import { seedClient, seedInvoice } from './helpers/fixtures.ts';
+import { startCheckout } from '../src/domain/payments.ts';
 import type { AppDeps, StripeGateway } from '../src/deps.ts';
 import type { Client, Invoice } from '../src/domain/models.ts';
 
@@ -246,6 +247,42 @@ test('POST /api/invoices/:id/checkout on the caller client open invoice creates 
     .first<{ source: string; payment_link_id: string | null }>();
   assert.equal(row?.source, 'portal');
   assert.equal(row?.payment_link_id, null);
+});
+
+test('POST /api/invoices/:id/checkout keeps the port the request arrived on in the return urls', async () => {
+  const { deps, sessions, app } = setup();
+  const a = await seedBoundAccount(deps, sessions, { token: 'a', userId: 'user_a', name: 'Client A' });
+  const invoice = await seedInvoice(deps.db, deps.now, a.id);
+
+  const response = await app.fetch(
+    new Request(`https://portal.test:8788/api/invoices/${invoice.id}/checkout`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer a' },
+    }),
+  );
+  assert.equal(response.status, 201);
+
+  const stripe = deps.stripe as FakeStripe;
+  assert.equal(stripe.calls[0].successUrl, `https://portal.test:8788/invoices/${invoice.id}?checkout=complete`);
+  assert.equal(stripe.calls[0].cancelUrl, `https://portal.test:8788/invoices/${invoice.id}?checkout=cancelled`);
+});
+
+test('POST /api/invoices/:id/checkout answers 409 payment_in_progress when Stripe cannot expire the other channel session', async () => {
+  const { deps, sessions, app, stripe } = setup();
+  const a = await seedBoundAccount(deps, sessions, { token: 'a', userId: 'user_a', name: 'Client A' });
+  const invoice = await seedInvoice(deps.db, deps.now, a.id);
+  await startCheckout(deps.db, deps, {
+    invoice,
+    client: a,
+    source: 'payment_link',
+    successUrl: 'https://pay.test/checkout/complete?session_id={CHECKOUT_SESSION_ID}',
+    cancelUrl: 'https://pay.test/checkout/cancel?session_id={CHECKOUT_SESSION_ID}',
+  });
+  stripe.expireShouldThrow = true;
+
+  const response = await call(app, 'POST', `/api/invoices/${invoice.id}/checkout`, 'a');
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error: 'payment_in_progress' });
 });
 
 test('POST /api/invoices/:id/checkout on another client invoice is not found and creates no session', async () => {

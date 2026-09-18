@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApp } from '../src/app.ts';
 import { createPaymentLink } from '../src/domain/payment-links.ts';
-import { startCheckout, applyStripeEvent } from '../src/domain/payments.ts';
+import { startCheckout, applyStripeEvent, invoiceForPaymentLinkSession } from '../src/domain/payments.ts';
 import { testDeps, payUrl, portalUrl, FakeStripe } from './helpers/app.ts';
 import { seedClient, seedInvoice } from './helpers/fixtures.ts';
 import type { AppDeps, StripeEvent } from '../src/deps.ts';
@@ -183,6 +183,29 @@ test('a checkout from the other source expires the pending session instead of re
   assert.equal(fresh?.source, 'portal');
 });
 
+test('a checkout from the other source throws payment_in_progress when Stripe cannot expire the pending session, without creating a second one', async () => {
+  const { deps, stripe } = setup();
+  const { client, invoice: open } = await seedPayable(deps);
+  const first = await startCheckout(deps.db, deps, { invoice: open, client, source: 'payment_link', successUrl, cancelUrl });
+  stripe.expireShouldThrow = true;
+
+  await assert.rejects(
+    () => startCheckout(deps.db, deps, { invoice: open, client, source: 'portal', successUrl, cancelUrl }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, 'payment_in_progress');
+      return true;
+    },
+  );
+
+  // No second live session was created, and the first payment is untouched.
+  assert.equal(stripe.calls.length, 1);
+  const rows = await deps.db.prepare('SELECT id, status, source FROM payments').all<{ id: string; status: string; source: string }>();
+  assert.equal(rows.results.length, 1);
+  assert.equal(rows.results[0].id, first.payment.id);
+  assert.equal(rows.results[0].status, 'pending');
+  assert.equal(rows.results[0].source, 'payment_link');
+});
+
 test('startCheckout opens a new session and cancels the old payment once the session expired', async () => {
   const { deps, stripe, advance } = setup();
   const { client, invoice: open } = await seedPayable(deps);
@@ -212,6 +235,25 @@ for (const status of ['processing', 'paid', 'void', 'draft'] as InvoiceStatus[])
       },
     );
     assert.equal(stripe.calls.length, 0);
+  });
+}
+
+for (const status of ['void', 'draft'] as InvoiceStatus[]) {
+  test(`invoiceForPaymentLinkSession returns null once the invoice is ${status}`, async () => {
+    const { deps } = setup();
+    const { client, invoice: open } = await seedPayable(deps);
+    const { payment: created } = await startCheckout(deps.db, deps, {
+      invoice: open,
+      client,
+      source: 'payment_link',
+      successUrl,
+      cancelUrl,
+    });
+    await deps.db.prepare(`UPDATE invoices SET status = ? WHERE id = ?`).bind(status, open.id).run();
+
+    const resolved = await invoiceForPaymentLinkSession(deps.db, created.stripeCheckoutSessionId);
+
+    assert.equal(resolved, null);
   });
 }
 
@@ -642,6 +684,25 @@ test('a refund event is stored against the payment and invoice it belongs to', a
   // Phase 1 records refunds and disputes for history only; no state changes.
   assert.equal((await payment(deps, created.id))?.status, 'succeeded');
   assert.equal((await invoice(deps, open.id))?.status, 'paid');
+});
+
+test('a signed event with no data.object is stored as ignored and never throws', async () => {
+  const { deps } = setup();
+  const event = {
+    id: 'evt_no_object',
+    type: 'charge.refunded',
+    livemode: false,
+    data: { object: null },
+  } as unknown as StripeEvent;
+
+  const result = await applyStripeEvent(deps.db, deps, event);
+
+  assert.equal(result.outcome, 'ignored');
+  const stored = await events(deps);
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].outcome, 'ignored');
+  assert.equal(stored[0].payment_id, null);
+  assert.equal(stored[0].invoice_id, null);
 });
 
 test('a payment_intent event is linked through the object id', async () => {

@@ -12,6 +12,7 @@ import {
   invoicePage,
   notFoundPage,
   paidPage,
+  paymentInProgressPage,
   processingPage,
   unavailablePage,
 } from '../pay/render.ts';
@@ -25,7 +26,7 @@ function hasErrorCode(error: unknown, code: string): boolean {
   return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === code;
 }
 
-function html(c: Context, body: string, status: 200 | 404 | 503): Response {
+function html(c: Context, body: string, status: 200 | 404 | 409 | 503): Response {
   return c.body(body, status, { 'Content-Type': 'text/html; charset=utf-8' });
 }
 
@@ -67,6 +68,10 @@ export function createPayRoutes(deps: AppDeps) {
     } catch (error) {
       // Not open (e.g. already paid): send the payer back to the invoice, no session created.
       if (hasErrorCode(error, 'invoice_not_payable')) return c.redirect(`${base}/i/${token}`, 303);
+      if (hasErrorCode(error, 'payment_in_progress')) {
+        const year = new Date(deps.now() * 1000).getUTCFullYear();
+        return html(c, paymentInProgressPage({ invoice, year }), 409);
+      }
       if (hasErrorCode(error, 'stripe_not_configured')) return html(c, unavailablePage(), 503);
       // Any other Stripe failure (rate limit, network, rejected amount) is the payer's problem to
       // retry, not a bare 500. The error itself never reaches the response.

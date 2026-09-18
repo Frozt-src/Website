@@ -272,6 +272,31 @@ test('a Stripe failure renders the unavailable page and logs the event without t
   assert.deepEqual(logged, ['checkout_create_failed']);
 });
 
+test('checkout returns 409 with the in-progress page when Stripe cannot expire the other channel session', async () => {
+  const deps = testDeps();
+  const stripe = deps.stripe as FakeStripe;
+  const app = createApp(deps);
+  const client = await seedClient(deps.db, deps.now);
+  const invoice = await seedInvoice(deps.db, deps.now, client.id);
+  const { token } = await createPaymentLink(deps.db, deps, invoice.id);
+  await startCheckout(deps.db, deps, {
+    invoice,
+    client,
+    source: 'portal',
+    successUrl: 'https://portal.test/invoices/x?checkout=complete',
+    cancelUrl: 'https://portal.test/invoices/x?checkout=cancelled',
+  });
+  stripe.expireShouldThrow = true;
+
+  const response = await app.fetch(new Request(payUrl(`/i/${token}/checkout`), { method: 'POST' }));
+  const body = await response.text();
+
+  assert.equal(response.status, 409);
+  assert.equal(response.headers.get('Content-Type'), 'text/html; charset=utf-8');
+  assert.match(body, /A payment for this invoice is already in progress\. Please check back shortly\./);
+  assert.equal((await payments(deps)).length, 1);
+});
+
 test('the checkout return urls carry the session id, never the payment-link token', async () => {
   const deps = testDeps();
   const stripe = deps.stripe as FakeStripe;
@@ -391,13 +416,33 @@ test('a portal checkout session is not resolvable through the pay-host return ro
   assert.equal(response.status, 404);
 });
 
-test('the old token-bearing return routes no longer exist', async () => {
+test('the old token-bearing return routes no longer exist and render the branded 404 page', async () => {
   const deps = testDeps();
   const app = createApp(deps);
   const { token } = await seedOpenInvoiceLink(deps);
 
-  assert.equal((await app.fetch(new Request(payUrl(`/i/${token}/complete`)))).status, 404);
-  assert.equal((await app.fetch(new Request(payUrl(`/i/${token}/cancel`)))).status, 404);
+  const complete = await app.fetch(new Request(payUrl(`/i/${token}/complete`)));
+  assert.equal(complete.status, 404);
+  assert.equal(complete.headers.get('Content-Type'), 'text/html; charset=utf-8');
+  const completeBody = await complete.text();
+  assert.match(completeBody, /<header class="wordmark">MONOLITH<\/header>/);
+  assert.match(completeBody, /Page not found/);
+
+  const cancel = await app.fetch(new Request(payUrl(`/i/${token}/cancel`)));
+  assert.equal(cancel.status, 404);
+  assert.equal(cancel.headers.get('Content-Type'), 'text/html; charset=utf-8');
+});
+
+test('any unknown pay-host path renders the branded 404 page, not JSON', async () => {
+  const deps = testDeps();
+  const app = createApp(deps);
+
+  const response = await app.fetch(new Request(payUrl('/anything')));
+  assert.equal(response.status, 404);
+  assert.equal(response.headers.get('Content-Type'), 'text/html; charset=utf-8');
+  const body = await response.text();
+  assert.match(body, /<header class="wordmark">MONOLITH<\/header>/);
+  assert.match(body, /Page not found/);
 });
 
 test('the stylesheet is served as css with a long cache lifetime', async () => {

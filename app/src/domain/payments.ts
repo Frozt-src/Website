@@ -67,6 +67,11 @@ function invoiceNotPayable(): Error {
   return Object.assign(new Error('invoice is not payable'), { code: 'invoice_not_payable' });
 }
 
+function paymentInProgress(): Error {
+  // The HTTP layers map the code to 409 (portal) or the in-progress page (pay host).
+  return Object.assign(new Error('a payment for this invoice is already in progress'), { code: 'payment_in_progress' });
+}
+
 export interface StartCheckoutInput {
   invoice: Invoice;
   client: Client;
@@ -93,8 +98,14 @@ export async function startCheckout(
   const liveUrl = pending && pending.session_expires_at > at ? pending.checkout_url : null;
   if (pending && liveUrl) {
     if (pending.source === input.source) return { url: liveUrl, payment: toPayment(pending) };
-    // The other channel's session is still payable at Stripe, so close it before opening ours.
-    await deps.stripe.expireCheckoutSession(pending.stripe_checkout_session_id);
+    // The other channel's session is still payable at Stripe, so close it before opening ours. If
+    // Stripe refuses (e.g. the session already completed and can no longer be expired), a payment is
+    // genuinely in flight: report that instead of opening a second live session for the same invoice.
+    try {
+      await deps.stripe.expireCheckoutSession(pending.stripe_checkout_session_id);
+    } catch {
+      throw paymentInProgress();
+    }
   }
 
   const paymentId = newId();
@@ -185,7 +196,10 @@ export async function invoiceForPaymentLinkSession(db: D1Database, sessionId: st
       WHERE p.stripe_checkout_session_id = ? AND p.source = 'payment_link'`)
     .bind(sessionId)
     .first<InvoiceRow>();
-  return row ? toInvoice(row) : null;
+  // A void or draft invoice is not the payer's to see through this lookup: void means the bill was
+  // withdrawn, and draft was never issued. Both render the generic 404, same as an unknown session.
+  if (!row || row.status === 'void' || row.status === 'draft') return null;
+  return toInvoice(row);
 }
 
 export async function listPaymentsForInvoice(db: D1Database, invoiceId: string): Promise<Payment[]> {
@@ -304,6 +318,7 @@ async function paymentForIntent(
   event: StripeEvent,
 ): Promise<{ id: string; invoice_id: string } | null> {
   const object = event.data.object;
+  if (!object || typeof object !== 'object') return null;
   const intentId =
     typeof object.payment_intent === 'string'
       ? object.payment_intent

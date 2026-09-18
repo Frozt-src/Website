@@ -12,22 +12,10 @@ function hasErrorCode(error: unknown, code: string): boolean {
   return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === code;
 }
 
-function portalBaseUrl(host: string): string {
-  // The dev host `localhost` is served over plain http; every other host is https.
-  const scheme = host === 'localhost' ? 'http' : 'https';
-  return `${scheme}://${host}`;
-}
-
 export function createPortalApi(deps: AppDeps) {
   const api = new Hono<AuthEnv>();
-  // Every API response is tenant-scoped billing data. Registered before the auth gate so the 401s
-  // are covered too; the portal's static assets keep their own caching headers.
-  api.use('*', async (c, next) => {
-    await next();
-    const headers = new Headers(c.res.headers);
-    headers.set('Cache-Control', 'no-store');
-    c.res = new Response(c.res.body, { status: c.res.status, statusText: c.res.statusText, headers });
-  });
+  // Cache-Control: no-store for every /api/* response, including the 401s here, is applied by the
+  // parent app (app/src/app.ts) so it covers this sub-router and the routes registered beside it.
   api.use('*', requireClient(deps));
 
   api.get('/me', async c => {
@@ -121,7 +109,9 @@ export function createPortalApi(deps: AppDeps) {
     const invoice = await getInvoiceForClient(deps.db, client.id, c.req.param('id'));
     if (!invoice) return c.json({ error: 'not_found' }, 404);
 
-    const base = portalBaseUrl(deps.hosts.portal);
+    // The origin the caller actually reached us on, so the dev port survives the Stripe round trip
+    // — the same technique the pay host uses for its own return urls.
+    const base = new URL(c.req.url).origin;
     try {
       const { url } = await startCheckout(deps.db, deps, {
         invoice,
@@ -133,6 +123,7 @@ export function createPortalApi(deps: AppDeps) {
       return c.json({ url }, 201);
     } catch (error) {
       if (hasErrorCode(error, 'invoice_not_payable')) return c.json({ error: 'invoice_not_payable' }, 409);
+      if (hasErrorCode(error, 'payment_in_progress')) return c.json({ error: 'payment_in_progress' }, 409);
       if (hasErrorCode(error, 'stripe_not_configured')) return c.json({ error: 'payments_not_configured' }, 503);
       // A Stripe outage is a temporary unavailability, not an application error.
       deps.logError('checkout_create_failed', error);

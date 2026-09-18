@@ -51,30 +51,32 @@ export default function Invoices() {
         </p>
       )}
       {invoices && invoices.length > 0 && (
-        <table className="portal-table">
-          <thead>
-            <tr>
-              <th scope="col">Number</th>
-              <th scope="col">Status</th>
-              <th scope="col">Amount</th>
-              <th scope="col">Due</th>
-            </tr>
-          </thead>
-          <tbody>
-            {invoices.map(invoice => (
-              <tr key={invoice.id}>
-                <td className="portal-nowrap">
-                  <Link href={`/invoices/${invoice.id}`}>{invoice.number}</Link>
-                </td>
-                <td>
-                  <span className={`portal-status portal-status-${invoice.status}`}>{statusLabel[invoice.status]}</span>
-                </td>
-                <td className="portal-money">{formatMoney(invoice.totalCents, invoice.currency)}</td>
-                <td>{formatDate(invoice.dueAt)}</td>
+        <div className="portal-table-wrap">
+          <table className="portal-table">
+            <thead>
+              <tr>
+                <th scope="col">Number</th>
+                <th scope="col">Status</th>
+                <th scope="col">Amount</th>
+                <th scope="col">Due</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {invoices.map(invoice => (
+                <tr key={invoice.id}>
+                  <td className="portal-nowrap">
+                    <Link href={`/invoices/${invoice.id}`}>{invoice.number}</Link>
+                  </td>
+                  <td>
+                    <span className={`portal-status portal-status-${invoice.status}`}>{statusLabel[invoice.status]}</span>
+                  </td>
+                  <td className="portal-money">{formatMoney(invoice.totalCents, invoice.currency)}</td>
+                  <td>{formatDate(invoice.dueAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );

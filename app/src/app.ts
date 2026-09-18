@@ -5,6 +5,7 @@ import { payHeaders, portalHeaders } from './http/headers.ts';
 import { createPayRoutes } from './http/pay.ts';
 import { createPortalApi } from './http/portal-api.ts';
 import { stripeWebhookHandler } from './http/webhook.ts';
+import { notFoundPage } from './pay/render.ts';
 
 function applyHeaders(headers: Record<string, string>): MiddlewareHandler {
   return async (c, next) => {
@@ -31,13 +32,20 @@ function createPayApp(deps: AppDeps) {
   app.get('/healthz', c => c.json({ status: 'ok' }));
   app.post('/api/stripe/webhook', stripeWebhookHandler(deps));
   app.route('/', createPayRoutes(deps));
-  app.notFound(c => c.json({ error: 'not_found' }, 404));
+  // Every other path on this host (including the retired token-bearing return routes) gets the same
+  // branded HTML 404 the invoice routes render, never a bare JSON error. The webhook keeps its own
+  // JSON responses; it is a real, matched route above, so this never applies to it.
+  app.notFound(c => c.body(notFoundPage(), 404, { 'Content-Type': 'text/html; charset=utf-8' }));
   return app;
 }
 
 function createPortalApp(deps: AppDeps) {
   const app = new Hono();
   app.use('*', applyHeaders(portalHeaders(deps.clerkFrontendApiUrl)));
+  // Every /api/* response is tenant-scoped billing data (or the public config / reserved webhook
+  // stub next to it). Registered before any /api route is added below, so no-store covers all of
+  // them no matter what order those routes are registered in.
+  app.use('/api/*', applyHeaders({ 'Cache-Control': 'no-store' }));
   app.get('/healthz', c => c.json({ status: 'ok' }));
   app.get('/api/public-config', c => c.json({ clerkPublishableKey: deps.clerkPublishableKey }));
   // The Stripe webhook is a pay-host route; reserving the path here keeps the portal's answer a plain

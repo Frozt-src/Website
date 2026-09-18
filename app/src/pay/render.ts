@@ -158,6 +158,26 @@ ${footer(year)}`;
   return layout({ title, body });
 }
 
+export interface PaymentInProgressPageInput {
+  invoice: Invoice;
+  year: number;
+}
+
+// Shown when the other channel's checkout session is still live at Stripe and cannot be expired
+// (e.g. it already completed there): the same shape as processingPage, since this too is a
+// wait-and-retry state for the payer, not an error.
+export function paymentInProgressPage(input: PaymentInProgressPageInput): string {
+  const { invoice, year } = input;
+  const body = `${wordmark()}
+<main>
+<h1>Invoice ${escapeHtml(invoice.number)}</h1>
+<p class="status">Payment in progress</p>
+<p>A payment for this invoice is already in progress. Please check back shortly.</p>
+</main>
+${footer(year)}`;
+  return layout({ title: `Invoice ${invoice.number}`, body });
+}
+
 export interface CancelPageInput {
   year: number;
 }
