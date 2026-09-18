@@ -1,6 +1,8 @@
 import { createApp } from './app.ts';
 import { clerkSessionVerifier, clerkUsersClient } from './auth/clerk.ts';
-import type { AppDeps, Hosts } from './deps.ts';
+import { stripeGateway } from './stripe/gateway.ts';
+import { stripeWebhookVerifier } from './stripe/webhooks.ts';
+import type { AppDeps, Hosts, StripeGateway, WebhookVerifier } from './deps.ts';
 
 export interface Env {
   DB: D1Database;
@@ -13,11 +15,32 @@ export interface Env {
   CLERK_FRONTEND_API_URL: string;
   CLERK_SECRET_KEY: string;
   CLERK_JWT_KEY: string;
+  STRIPE_SECRET_KEY: string;
+  STRIPE_WEBHOOK_SECRET: string;
 }
 
-// Task 4 replaces these with the real Stripe adapters.
-function notConfigured(): never {
-  throw new Error('not configured');
+function configured(value: string | undefined): boolean {
+  return typeof value === 'string' && value !== '';
+}
+
+// Without Stripe credentials the Worker still serves everything else; only paying is unavailable.
+function stripeFor(env: Env): StripeGateway {
+  if (configured(env.STRIPE_SECRET_KEY)) return stripeGateway(env.STRIPE_SECRET_KEY);
+  return {
+    createCheckoutSession: async () => {
+      throw Object.assign(new Error('stripe is not configured'), { code: 'stripe_not_configured' });
+    },
+  };
+}
+
+function webhooksFor(env: Env): WebhookVerifier {
+  if (configured(env.STRIPE_WEBHOOK_SECRET)) return stripeWebhookVerifier(env.STRIPE_WEBHOOK_SECRET);
+  // Throwing here makes the webhook route answer 400 rather than accept unverified payloads.
+  return {
+    verify: async () => {
+      throw new Error('stripe webhook secret is not configured');
+    },
+  };
 }
 
 function logError(event: string, error: unknown): void {
@@ -47,8 +70,8 @@ function toDeps(env: Env): AppDeps {
       logError,
     }),
     clerkUsers: clerkUsersClient({ secretKey: env.CLERK_SECRET_KEY }),
-    stripe: { createCheckoutSession: async () => notConfigured() },
-    webhooks: { verify: async () => notConfigured() },
+    stripe: stripeFor(env),
+    webhooks: webhooksFor(env),
     now: () => Math.floor(Date.now() / 1000),
     randomBytes: (length: number) => crypto.getRandomValues(new Uint8Array(length)),
     logError,

@@ -3,6 +3,7 @@ import type { MiddlewareHandler } from 'hono';
 import type { AppDeps } from './deps.ts';
 import { payHeaders, portalHeaders } from './http/headers.ts';
 import { createPortalApi } from './http/portal-api.ts';
+import { stripeWebhookHandler } from './http/webhook.ts';
 
 function applyHeaders(headers: Record<string, string>): MiddlewareHandler {
   return async (c, next) => {
@@ -15,6 +16,7 @@ function createPayApp(deps: AppDeps) {
   const app = new Hono();
   app.use('*', applyHeaders(payHeaders()));
   app.get('/healthz', c => c.json({ status: 'ok' }));
+  app.post('/api/stripe/webhook', stripeWebhookHandler(deps));
   app.notFound(c => c.json({ error: 'not_found' }, 404));
   return app;
 }

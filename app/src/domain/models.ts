@@ -85,6 +85,7 @@ export interface Payment {
   source: 'payment_link' | 'portal';
   stripeCheckoutSessionId: string;
   stripePaymentIntentId: string | null;
+  checkoutUrl: string | null;
   amountCents: number;
   currency: string;
   method: string | null;
