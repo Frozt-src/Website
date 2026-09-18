@@ -11,4 +11,3 @@ test-results/
 playwright-report/
 *.local
 *.log
-.deploy/
