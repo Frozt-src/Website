@@ -1,5 +1,7 @@
 # Monolith Implementation Plan
 
+> Hosting superseded on 2026-09-18: the site now runs on Cloudflare Workers Static Assets. See `../specs/2026-09-18-cloudflare-release-design.md`.
+
 > For agentic workers: use subagent-driven-development with scoped file ownership and parent integration/review.
 
 **Goal:** Deliver a cinematic, credible Monolith site with a real private inquiry backend at mnlith.dev.

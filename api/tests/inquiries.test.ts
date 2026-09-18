@@ -125,3 +125,87 @@ test('www origin and API alias save with correct CORS response', async () => {
   assert.equal(result.headers.get('Access-Control-Allow-Origin'),'https://www.mnlith.dev');
   sql.close();
 });
+test('IPv6 clients share one quota per /64 prefix', async () => {
+  const {sql,env} = database();
+  const from = (ip: string) => { const req = request(); req.headers.set('CF-Connecting-IP', ip); return worker.fetch(req, env as any); };
+  for (let i = 1; i <= 5; i++) assert.equal((await from(`2001:db8:1:2::${i}`)).status, 201);
+  assert.equal((await from('2001:0db8:0001:0002:0000:0000:0000:ffff')).status, 429);
+  assert.equal((await from('2001:db8:1:3::1')).status, 201);
+  sql.close();
+});
+test('single-line fields reject breaks, controls and bidi overrides; team size is a known value', async () => {
+  for (const patch of [{name:'Alex\r\nBcc: x@evil.test'}, {company:'Acme\tCo'}, {name:'Alex\u0085'}, {company:'Acme\u202egnp.exe'}, {message:'Hello there \u2066hidden\u2069 text'}, {teamSize:'11–50'}, {teamSize:'lots'}]) {
+    assert.equal((await worker.fetch(request({...data, ...patch}), {})).status, 400);
+  }
+  const {sql,env} = database();
+  assert.equal((await worker.fetch(request({...data, teamSize:'11-50', message:'First line.\nSecond line.'}), env as any)).status, 201);
+  sql.close();
+});
+test('HEAD /health succeeds without a body', async () => {
+  const response = await worker.fetch(new Request('https://api.mnlith.dev/health', {method:'HEAD'}), {});
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), '');
+});
+test('storage failures are logged without personal data', async (t) => {
+  const logged = t.mock.method(console, 'error', () => {});
+  const {sql,env} = database(); sql.exec('DROP TABLE inquiries');
+  assert.equal((await worker.fetch(request(), env as any)).status, 503);
+  const lines = logged.mock.calls.map(call => String(call.arguments[0]));
+  assert.ok(lines.some(line => JSON.parse(line).event === 'inquiry_store_failed'));
+  assert.ok(lines.every(line => !line.includes('alex@example.com') && !line.includes('Alex Doe') && !line.includes('192.0.2.1')));
+  sql.close();
+});
+test('a failing purge still runs the other purge and fails the invocation', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const {sql,env} = database();
+  await worker.fetch(request(), env as any);
+  sql.exec('UPDATE rate_limits SET window_start = 1');
+  sql.exec('DROP TABLE inquiries');
+  await assert.rejects(worker.scheduled({}, env as any));
+  assert.equal(sql.prepare('SELECT COUNT(*) n FROM rate_limits').get()?.n, 0);
+  sql.close();
+});
+
+function mailer(fail = false) {
+  const sent: any[] = [];
+  return { sent, NOTIFY: { async send(message: any) { if (fail) throw new Error('Rejected reply-to alex@example.com'); sent.push(message); return {messageId:'test'}; } } };
+}
+function context() {
+  const pending: Promise<unknown>[] = [];
+  return { pending, ctx: { waitUntil(promise: Promise<unknown>) { pending.push(promise); }, passThroughOnException() {} } };
+}
+test('a stored inquiry is emailed to the owner with the customer as reply-to', async () => {
+  const {sql,env} = database(); const {sent,NOTIFY} = mailer(); const {pending,ctx} = context();
+  const result = await worker.fetch(request({...data, teamSize:'11-50'}), {...env, NOTIFY} as any, ctx as any);
+  assert.equal(result.status, 201);
+  const {id} = await result.json() as {id:string};
+  await Promise.all(pending);
+  assert.equal(sent.length, 1);
+  const [message] = sent;
+  assert.deepEqual(message.from, {name:'Monolith website', email:'inquiries@notify.mnlith.dev'});
+  assert.equal(message.to, 'eldritch@mnlith.dev');
+  assert.equal(message.replyTo, 'alex@example.com');
+  assert.equal(message.subject, 'New website inquiry: Managed IT');
+  assert.equal(message.html, undefined);
+  assert.ok(message.text.includes(data.message) && message.text.includes('Team size: 11-50') && message.text.includes(`Reference: ${id}`));
+  sql.close();
+});
+test('a failed notification is logged and never changes the saved response', async (t) => {
+  const logged = t.mock.method(console, 'error', () => {});
+  const {sql,env} = database(); const {NOTIFY} = mailer(true); const {pending,ctx} = context();
+  const result = await worker.fetch(request(), {...env, NOTIFY} as any, ctx as any);
+  assert.equal(result.status, 201);
+  await Promise.all(pending);
+  assert.equal(sql.prepare('SELECT COUNT(*) n FROM inquiries').get()?.n, 1);
+  assert.ok(logged.mock.calls.some(call => JSON.parse(String(call.arguments[0])).event === 'inquiry_notify_failed'));
+  assert.ok(logged.mock.calls.every(call => !String(call.arguments[0]).includes('alex@example.com')));
+  sql.close();
+});
+test('rejected and rate-limited submissions are never emailed', async () => {
+  const {sql,env} = database(); const {sent,NOTIFY} = mailer(); const {pending,ctx} = context();
+  for (let i = 0; i < 6; i++) await worker.fetch(request(), {...env, NOTIFY} as any, ctx as any);
+  await worker.fetch(request({...data, consent:false}), {...env, NOTIFY} as any, ctx as any);
+  await Promise.all(pending);
+  assert.equal(sent.length, 5);
+  sql.close();
+});

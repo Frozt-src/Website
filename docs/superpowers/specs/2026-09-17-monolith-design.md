@@ -1,5 +1,7 @@
 # Monolith website design
 
+> Hosting superseded on 2026-09-18: the site now runs on Cloudflare Workers Static Assets. See `2026-09-18-cloudflare-release-design.md`.
+
 ## Goal and delivery
 Create a credible, cinematic IT consulting and managed-services website at the established https://mnlith.dev. Preserve Frozt-src/Website, GitHub Pages, Cloudflare DNS, and all six existing email records. The user explicitly commissioned research, original imagery, agent-led scaffolding, frontend/backend implementation, and a ready-to-ship deployment.
 
