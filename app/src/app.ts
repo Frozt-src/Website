@@ -9,11 +9,19 @@ import { stripeWebhookHandler } from './http/webhook.ts';
 function applyHeaders(headers: Record<string, string>): MiddlewareHandler {
   return async (c, next) => {
     await next();
+    // The response may come from a binding (e.g. Cloudflare's ASSETS) whose headers are immutable,
+    // so rebuild the response instead of mutating c.res.headers in place.
+    const responseHeaders = new Headers(c.res.headers);
     // A route that already set one of these (e.g. /pay.css caching its own Cache-Control) keeps
     // its value; every other response gets the host's default.
     for (const [key, value] of Object.entries(headers)) {
-      if (!c.res.headers.has(key)) c.res.headers.set(key, value);
+      if (!responseHeaders.has(key)) responseHeaders.set(key, value);
     }
+    c.res = new Response(c.res.body, {
+      status: c.res.status,
+      statusText: c.res.statusText,
+      headers: responseHeaders,
+    });
   };
 }
 

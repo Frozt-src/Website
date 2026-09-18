@@ -57,3 +57,26 @@ test('the pay host never serves static assets', async () => {
   const response = await app.fetch(new Request(payUrl('/index.html')));
   assert.equal(response.status, 404);
 });
+
+test('portal still applies security headers when the asset response has immutable headers', async () => {
+  // The real Cloudflare ASSETS binding returns Responses whose headers throw on mutation, unlike
+  // the plain mutable Response the other fakes here return.
+  const assetBody = 'portal shell';
+  const assets = {
+    fetch: async () => {
+      const res = new Response(assetBody, { status: 200 });
+      Object.defineProperty(res.headers, 'set', {
+        value() {
+          throw new TypeError("Can't modify immutable headers");
+        },
+      });
+      return res;
+    },
+  };
+  const app = createApp(testDeps({ assets }));
+  const response = await app.fetch(new Request(portalUrl('/anything')));
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), assetBody);
+  assert.ok(response.headers.get('Content-Security-Policy')?.includes("script-src 'self' https://fake.clerk.accounts.dev"));
+  assert.equal(response.headers.get('Strict-Transport-Security'), 'max-age=31536000; includeSubDomains');
+});
