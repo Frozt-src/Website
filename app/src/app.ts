@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { MiddlewareHandler } from 'hono';
 import type { AppDeps } from './deps.ts';
 import { payHeaders, portalHeaders } from './http/headers.ts';
+import { createPortalApi } from './http/portal-api.ts';
 
 function applyHeaders(headers: Record<string, string>): MiddlewareHandler {
   return async (c, next) => {
@@ -23,6 +24,8 @@ function createPortalApp(deps: AppDeps) {
   app.use('*', applyHeaders(portalHeaders(deps.clerkFrontendApiUrl)));
   app.get('/healthz', c => c.json({ status: 'ok' }));
   app.get('/api/public-config', c => c.json({ clerkPublishableKey: deps.clerkPublishableKey }));
+  // Registered after public-config, so that one public route still answers before requireClient.
+  app.route('/api', createPortalApi(deps));
   app.notFound(c => {
     if (!c.req.path.startsWith('/api/') && deps.assets) return deps.assets.fetch(c.req.raw);
     return c.json({ error: 'not_found' }, 404);
