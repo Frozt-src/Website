@@ -16,6 +16,7 @@ Money is integer cents, currency always `usd`. Timestamps are Unix seconds. IDs 
 | `not_found` | The resource doesn't exist, or belongs to another client. | Portal API, 404; unknown route, 404 |
 | `invoice_not_payable` | The invoice's status is not `open`. | `POST /api/invoices/:id/checkout`, 409 |
 | `payments_not_configured` | `STRIPE_SECRET_KEY` is unset. | `POST /api/invoices/:id/checkout`, 503 |
+| `payments_unavailable` | The Stripe API call failed (rate limit, network, rejected amount). | `POST /api/invoices/:id/checkout`, 503 |
 | `invalid_signature` | The Stripe webhook signature failed verification, or is missing. | `POST /api/stripe/webhook`, 400 |
 | `payload_too_large` | Webhook body exceeds 64 KiB. | `POST /api/stripe/webhook`, 413 |
 
@@ -26,7 +27,11 @@ Every route below requires `Authorization: Bearer <Clerk session JWT>` except
 `@clerk/backend`, resolves the caller's membership (binding it to the Clerk user id on first
 login), and scopes every query by that membership's `client_id`. A resource belonging to a
 different client answers `404 not_found`, never `403` — the response never confirms that a
-resource exists for someone else.
+resource exists for someone else. A `draft` invoice has not been issued to the client, so it is
+invisible on every portal route: never listed, `404` on detail and on checkout.
+
+Every `/api/*` response carries `Cache-Control: no-store`, including the `401` and `403` ones. The
+portal's static assets keep their own caching headers.
 
 ### `GET /api/public-config`
 
@@ -67,7 +72,9 @@ Own client only; any other id is `404 not_found`.
 }
 ```
 
-### `GET /api/invoices[?status=draft|open|processing|paid|void]`
+### `GET /api/invoices[?status=open|processing|paid|void]`
+
+Never includes `draft` invoices, whatever `status` asks for.
 
 ```json
 {
@@ -92,19 +99,28 @@ Own client only; any other id is `404 not_found`.
     { "id": "...", "description": "...", "quantity": 1, "unitCents": 27500, "amountCents": 27500 }
   ],
   "payments": [
-    { "id": "...", "status": "succeeded", "amountCents": 42500, "method": "card", "createdAt": 1234567890, "succeededAt": 1234567890 }
+    { "id": "...", "status": "succeeded", "amountCents": 42500, "method": null, "createdAt": 1234567890, "succeededAt": 1234567890 }
   ]
 }
 ```
+
+`method` is best-effort in Phase 1 and is usually `null`: with Stripe's automatic payment methods a
+Checkout Session lists every method enabled on the account, so it is only recorded when the session
+offered exactly one (`"card"`, `"us_bank_account"`). A later phase reads the real value from the
+PaymentIntent.
 
 ### `POST /api/invoices/:id/checkout`
 
 Starts (or reuses a pending, unexpired) Stripe Checkout Session for the invoice.
 
+A pending session is reused only when it was created by this same channel (`source = 'portal'`); a
+pending pay-host session for the invoice is expired at Stripe and marked `canceled` first.
+
 - `201 { "url": "https://checkout.stripe.com/..." }`
-- `404 { "error": "not_found" }` — not the caller's invoice
+- `404 { "error": "not_found" }` — not the caller's invoice, or a `draft`
 - `409 { "error": "invoice_not_payable" }` — invoice status is not `open`
 - `503 { "error": "payments_not_configured" }` — `STRIPE_SECRET_KEY` is unset
+- `503 { "error": "payments_unavailable" }` — the Stripe call failed
 
 ### `GET /healthz`
 
@@ -112,34 +128,49 @@ Both hosts. `{ "status": "ok" }`, no auth.
 
 ## Pay host routes (`pay.mnlith.dev`, `pay.localhost` in dev)
 
-Server-rendered HTML, no client-side JavaScript, no Clerk. Every route resolves the invoice by
-the payment-link token's SHA-256 hash; a malformed, unknown, revoked, or void-invoice token is a
-generic `404` HTML page in every case below.
+Server-rendered HTML, no client-side JavaScript, no Clerk. The `/i/:token` routes resolve the
+invoice by the payment-link token's SHA-256 hash; a malformed, unknown, revoked, `draft`-invoice or
+void-invoice token is a generic `404` HTML page in every case below.
 
 | Route | Behavior |
 |---|---|
-| `GET /i/:token` | Renders the invoice (number, description, line items, amount due, a Pay form) for an `open` or `processing` invoice; a distinct "already paid" page for `paid`; the generic 404 otherwise. |
-| `POST /i/:token/checkout` | Creates (or reuses) a Stripe Checkout Session and `303`-redirects to it. If the invoice isn't payable, `303`s back to `/i/:token` instead of creating a session. If Stripe isn't configured, renders the 503 "payments are not available right now" page. |
-| `GET /i/:token/complete` | Post-Checkout landing page; message depends on the invoice's current status (paid / processing / still confirming). |
-| `GET /i/:token/cancel` | Shown when the payer cancels out of Stripe Checkout. |
+| `GET /i/:token` | Renders the invoice (number, description, line items, amount due, a Pay form) for an `open` invoice; a distinct "already paid" page for `paid`; the generic 404 otherwise. |
+| `GET /i/:token` (invoice `processing`) | A distinct "payment processing" page for a settling ACH debit: number and status only, no line items, no amount, no Pay form. |
+| `POST /i/:token/checkout` | Creates (or reuses) a Stripe Checkout Session and `303`-redirects to it. If the invoice isn't payable, `303`s back to `/i/:token` instead of creating a session. If Stripe isn't configured or the Stripe call fails, renders the 503 "payments are not available right now" page. |
+| `GET /checkout/complete?session_id=cs_...` | Post-Checkout landing page; message depends on the invoice's current status (paid — with number, amount and paid date / processing / still confirming). |
+| `GET /checkout/cancel?session_id=cs_...` | Shown when the payer cancels out of Stripe Checkout. |
 | `GET /pay.css`, `GET /favicon.svg` | Static assets for the pay page (not user data). |
 | `GET /healthz` | `{ "status": "ok" }`. |
 
-CSP on every pay-host response:
+The two return routes are the `success_url` and `cancel_url` handed to Stripe, built from the
+origin the request arrived on (so a dev port survives the round trip) with Stripe's literal
+`{CHECKOUT_SESSION_ID}` placeholder. **No payment-link token is ever put in a url given to Stripe**,
+and neither page contains a token or a link to one. The `session_id` must match
+`^cs_(test|live)_[A-Za-z0-9]{8,}$` and must belong to a payment-link checkout of this database;
+anything else is the generic 404 before any lookup happens.
+
+Every pay-host response carries `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and
+`X-Robots-Tag: noindex, nofollow` (the HTML also carries `<meta name="robots" content="noindex,
+nofollow">`), and the CSP
 `default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self' https://checkout.stripe.com; base-uri 'none'; frame-ancestors 'none'`.
+A request for an unrecognized hostname gets that same header set with its generic 404.
 
 ## Webhook contract
 
 ### `POST /api/stripe/webhook` (pay host)
 
 Authenticated only by the Stripe signature (`stripe-signature` header) — there is no session or
-API key on this route. Body is capped at 64 KiB (`413 payload_too_large` above that, checked by
-`Content-Length` first, then by the actual decoded size).
+API key on this route. Body is capped at 64 KiB (`413 payload_too_large` above that): `Content-Length`
+is checked first, then the body is read as a stream and abandoned as soon as it passes the cap, so an
+oversized chunked body is never buffered whole.
 
 1. Verify the signature with `constructEventAsync` + `createSubtleCryptoProvider()`
    (`STRIPE_WEBHOOK_SECRET`). Failure or a missing header: `400 { "error": "invalid_signature" }`.
 2. If the event's `livemode` doesn't match `STRIPE_MODE`, or the event type isn't one of the four
-   handled types, it is recorded with outcome `ignored` and answered `200`.
+   handled types, it is recorded with outcome `ignored` and answered `200`. A refund, dispute or
+   `payment_intent.*` event is linked to the `payments` row whose `stripe_payment_intent_id` it
+   names (`data.object.payment_intent`, or `data.object.id` for `payment_intent.*`), so the history
+   can be joined to the payment; it still changes no state in Phase 1.
 3. Otherwise the event, plus every state change it causes, is written in one atomic
    `db.batch()` alongside an insert into `payment_events` (`stripe_event_id` is `UNIQUE`). If that
    insert collides — the event was already processed — nothing is re-applied and the response is
@@ -148,9 +179,17 @@ API key on this route. Body is capped at 64 KiB (`413 payload_too_large` above t
    trusted from the event; a mismatch is recorded (`outcome: "mismatch"`) and never marks an
    invoice paid. An event for a session this database has no record of is recorded as
    `unmatched`.
+5. `payload_json` stores the event with `data.object.success_url`, `data.object.cancel_url` and
+   `data.object.url` removed. They are the Worker's own urls, and historically carried a
+   payment-link token; the in-memory event is never modified.
+6. Every invoice transition is conditional on the payment row's state *after* this batch's payment
+   update, so out-of-order delivery cannot strand an invoice: a late `completed` cannot move an
+   invoice whose payment already failed, and `invoice.paid` is audited only when the invoice update
+   actually fired.
 
 Handled event types: `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
-`checkout.session.async_payment_failed`, `checkout.session.expired`.
+`checkout.session.async_payment_failed`, `checkout.session.expired`. Refund and dispute events
+(`charge.refunded`, `charge.dispute.created`, `charge.dispute.closed`) are recorded for history only.
 
 Response: `200 { "received": true, "outcome": "applied" | "ignored" | "unmatched" | "mismatch" | "duplicate" }`.
 

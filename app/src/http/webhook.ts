@@ -5,17 +5,44 @@ import { applyStripeEvent } from '../domain/payments.ts';
 
 const maxBodyBytes = 64 * 1024;
 
+// Read the body as it arrives and give up as soon as it passes the cap, so an unannounced (chunked)
+// oversized payload is never buffered whole. Returns null when the cap is exceeded.
+async function readCappedBody(request: Request): Promise<string | null> {
+  const declaredLength = Number(request.headers.get('Content-Length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) return null;
+  if (!request.body) return '';
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maxBodyBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 export function stripeWebhookHandler(deps: AppDeps): Handler {
   return async c => {
-    const declaredLength = Number(c.req.header('Content-Length'));
-    if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) {
-      return c.json({ error: 'payload_too_large' }, 413);
-    }
-
-    const payload = await c.req.text();
-    if (new TextEncoder().encode(payload).length > maxBodyBytes) {
-      return c.json({ error: 'payload_too_large' }, 413);
-    }
+    const payload = await readCappedBody(c.req.raw);
+    if (payload === null) return c.json({ error: 'payload_too_large' }, 413);
 
     const signature = c.req.header('stripe-signature');
     if (!signature) return c.json({ error: 'invalid_signature' }, 400);

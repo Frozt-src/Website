@@ -34,6 +34,7 @@ export function layout(input: { title: string; body: string }): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
 <title>${escapeHtml(input.title)}</title>
 <link rel="stylesheet" href="/pay.css">
 <link rel="icon" href="/favicon.svg">
@@ -115,17 +116,22 @@ ${footer(year)}`;
 
 export interface CompletePageInput {
   invoice: Invoice;
-  token: string;
   year: number;
 }
 
+// Reached from Stripe with only the Checkout Session id, so nothing here can reference the payment
+// link: no token in the copy, and no link back to the tokenised invoice page.
 export function completePage(input: CompletePageInput): string {
-  const { invoice, token, year } = input;
+  const { invoice, year } = input;
   let title: string;
   let message: string;
+  let details = '';
   if (invoice.status === 'paid') {
+    const paidDate = invoice.paidAt !== null ? formatDate(invoice.paidAt) : '';
     title = 'Payment received';
     message = 'Thank you — your payment has been received.';
+    details = `<p>Invoice ${escapeHtml(invoice.number)}, paid on ${escapeHtml(paidDate)}.</p>
+<p class="amount-due"><span>Amount</span><strong>${formatUsd(invoice.totalCents)}</strong></p>`;
   } else if (invoice.status === 'processing') {
     title = 'Payment processing';
     message = 'Your bank payment is processing. This can take a few business days.';
@@ -137,26 +143,22 @@ export function completePage(input: CompletePageInput): string {
 <main>
 <h1>${title}</h1>
 <p>${message}</p>
-<p><a href="/i/${escapeHtml(token)}">Back to invoice</a></p>
-</main>
+${details}</main>
 ${footer(year)}`;
   return layout({ title, body });
 }
 
 export interface CancelPageInput {
-  token: string;
   year: number;
 }
 
 export function cancelPage(input: CancelPageInput): string {
-  const { token, year } = input;
   const body = `${wordmark()}
 <main>
 <h1>Checkout canceled</h1>
-<p>You can return to the invoice at any time.</p>
-<p><a href="/i/${escapeHtml(token)}">Back to invoice</a></p>
+<p>Your payment was cancelled. Use the link from your invoice email to try again.</p>
 </main>
-${footer(year)}`;
+${footer(input.year)}`;
   return layout({ title: 'Checkout canceled', body });
 }
 

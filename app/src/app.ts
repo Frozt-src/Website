@@ -52,6 +52,15 @@ function createPortalApp(deps: AppDeps) {
   return app;
 }
 
+// The unknown-host 404 is built outside both Hono apps, so it applies the header set itself: no
+// response leaves the Worker without one. The pay set is the stricter of the two.
+function unknownHostResponse(): Response {
+  return new Response(JSON.stringify({ error: 'not_found' }), {
+    status: 404,
+    headers: { 'Content-Type': 'application/json; charset=utf-8', ...payHeaders() },
+  });
+}
+
 export function createApp(deps: AppDeps): { fetch(request: Request): Promise<Response> } {
   const payApp = createPayApp(deps);
   const portalApp = createPortalApp(deps);
@@ -60,10 +69,7 @@ export function createApp(deps: AppDeps): { fetch(request: Request): Promise<Res
       const hostname = new URL(request.url).hostname.toLowerCase();
       if (hostname === deps.hosts.pay.toLowerCase()) return payApp.fetch(request);
       if (hostname === deps.hosts.portal.toLowerCase()) return portalApp.fetch(request);
-      return new Response(JSON.stringify({ error: 'not_found' }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
-      });
+      return unknownHostResponse();
     },
   };
 }

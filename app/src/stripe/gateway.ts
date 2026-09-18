@@ -44,5 +44,9 @@ export function stripeGateway(secretKey: string): StripeGateway {
       if (!session.url) throw new Error('stripe returned a checkout session without a url');
       return { id: session.id, url: session.url };
     },
+
+    async expireCheckoutSession(sessionId: string) {
+      await stripe.checkout.sessions.expire(sessionId);
+    },
   };
 }

@@ -20,6 +20,14 @@ function portalBaseUrl(host: string): string {
 
 export function createPortalApi(deps: AppDeps) {
   const api = new Hono<AuthEnv>();
+  // Every API response is tenant-scoped billing data. Registered before the auth gate so the 401s
+  // are covered too; the portal's static assets keep their own caching headers.
+  api.use('*', async (c, next) => {
+    await next();
+    const headers = new Headers(c.res.headers);
+    headers.set('Cache-Control', 'no-store');
+    c.res = new Response(c.res.body, { status: c.res.status, statusText: c.res.statusText, headers });
+  });
   api.use('*', requireClient(deps));
 
   api.get('/me', async c => {
@@ -126,7 +134,9 @@ export function createPortalApi(deps: AppDeps) {
     } catch (error) {
       if (hasErrorCode(error, 'invoice_not_payable')) return c.json({ error: 'invoice_not_payable' }, 409);
       if (hasErrorCode(error, 'stripe_not_configured')) return c.json({ error: 'payments_not_configured' }, 503);
-      throw error;
+      // A Stripe outage is a temporary unavailability, not an application error.
+      deps.logError('checkout_create_failed', error);
+      return c.json({ error: 'payments_unavailable' }, 503);
     }
   });
 

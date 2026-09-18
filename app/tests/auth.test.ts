@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApp } from '../src/app.ts';
+import { authorizedParties } from '../src/index.ts';
 import { resolveMembership } from '../src/auth/membership.ts';
 import { newId } from '../src/domain/ids.ts';
 import { outstandingBalanceCents } from '../src/domain/invoices.ts';
@@ -276,4 +277,16 @@ test('services list only the services of the caller client', async () => {
   const body = await response.json();
   assert.deepEqual(body.services.map((service: { name: string }) => service.name), ['Managed backups']);
   assert.equal(body.services[0].status, 'active');
+});
+
+test('the dev portal origins cover the Vite dev server, not just the Worker', async () => {
+  assert.deepEqual(authorizedParties('portal.mnlith.dev'), ['https://portal.mnlith.dev']);
+  assert.deepEqual(authorizedParties('localhost'), [
+    'https://localhost',
+    'http://localhost:8788',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:5174',
+    'http://127.0.0.1:5174',
+  ]);
 });

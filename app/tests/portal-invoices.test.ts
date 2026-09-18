@@ -52,9 +52,11 @@ async function seedBoundAccount(
   return client;
 }
 
-async function setInvoiceStatus(deps: AppDeps, invoiceId: string, status: 'processing' | 'paid'): Promise<void> {
+async function setInvoiceStatus(deps: AppDeps, invoiceId: string, status: 'processing' | 'paid' | 'void'): Promise<void> {
   if (status === 'paid') {
     await deps.db.prepare(`UPDATE invoices SET status = 'paid', paid_at = ? WHERE id = ?`).bind(deps.now(), invoiceId).run();
+  } else if (status === 'void') {
+    await deps.db.prepare(`UPDATE invoices SET status = 'void' WHERE id = ?`).bind(invoiceId).run();
   } else {
     await deps.db.prepare(`UPDATE invoices SET status = 'processing' WHERE id = ?`).bind(invoiceId).run();
   }
@@ -79,6 +81,22 @@ test('GET /api/invoices without a session is unauthenticated', async () => {
   const response = await call(app, 'GET', '/api/invoices');
   assert.equal(response.status, 401);
   assert.deepEqual(await response.json(), { error: 'unauthenticated' });
+});
+
+test('portal API responses are never cacheable, authenticated or not', async () => {
+  const { deps, sessions, app } = setup();
+  const a = await seedBoundAccount(deps, sessions, { token: 'a', userId: 'user_a', name: 'Client A' });
+  await seedInvoice(deps.db, deps.now, a.id);
+
+  for (const path of ['/api/me', '/api/invoices']) {
+    const response = await call(app, 'GET', path, 'a');
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  }
+
+  const unauthenticated = await call(app, 'GET', '/api/invoices');
+  assert.equal(unauthenticated.status, 401);
+  assert.equal(unauthenticated.headers.get('Cache-Control'), 'no-store');
 });
 
 test('GET /api/invoices lists only the caller client invoices, newest first, with the exact fields', async () => {
@@ -113,6 +131,43 @@ test('GET /api/invoices?status= filters to that status', async () => {
   const body = await response.json();
   assert.deepEqual(body.invoices.map((invoice: { id: string }) => invoice.id), [paid.id]);
   assert.notEqual(open.id, paid.id);
+});
+
+test('a draft invoice is never listed, readable or payable through the portal', async () => {
+  const { deps, sessions, app, stripe } = setup();
+  const a = await seedBoundAccount(deps, sessions, { token: 'a', userId: 'user_a', name: 'Client A' });
+  const issued = await seedInvoice(deps.db, deps.now, a.id, { description: 'Issued' });
+  const draft = await seedInvoice(deps.db, deps.now, a.id, { description: 'Draft', status: 'draft' });
+
+  const list = await call(app, 'GET', '/api/invoices', 'a');
+  const body = await list.json();
+  assert.deepEqual(body.invoices.map((invoice: { id: string }) => invoice.id), [issued.id]);
+
+  const detail = await call(app, 'GET', `/api/invoices/${draft.id}`, 'a');
+  assert.equal(detail.status, 404);
+  assert.deepEqual(await detail.json(), { error: 'not_found' });
+
+  const checkout = await call(app, 'POST', `/api/invoices/${draft.id}/checkout`, 'a');
+  assert.equal(checkout.status, 404);
+  assert.deepEqual(await checkout.json(), { error: 'not_found' });
+  assert.equal(stripe.calls.length, 0);
+});
+
+test('a void invoice stays in the portal history but cannot be paid', async () => {
+  const { deps, sessions, app, stripe } = setup();
+  const a = await seedBoundAccount(deps, sessions, { token: 'a', userId: 'user_a', name: 'Client A' });
+  const invoice = await seedInvoice(deps.db, deps.now, a.id);
+  await setInvoiceStatus(deps, invoice.id, 'void');
+
+  const list = await call(app, 'GET', '/api/invoices', 'a');
+  const body = await list.json();
+  assert.deepEqual(body.invoices.map((row: { id: string }) => row.id), [invoice.id]);
+  assert.equal((await call(app, 'GET', `/api/invoices/${invoice.id}`, 'a')).status, 200);
+
+  const checkout = await call(app, 'POST', `/api/invoices/${invoice.id}/checkout`, 'a');
+  assert.equal(checkout.status, 409);
+  assert.deepEqual(await checkout.json(), { error: 'invoice_not_payable' });
+  assert.equal(stripe.calls.length, 0);
 });
 
 test('GET /api/invoices/:id for another client is not found', async () => {
@@ -179,7 +234,7 @@ test('POST /api/invoices/:id/checkout on the caller client open invoice creates 
   const response = await call(app, 'POST', `/api/invoices/${invoice.id}/checkout`, 'a');
   assert.equal(response.status, 201);
   const body = await response.json();
-  assert.equal(body.url, 'https://checkout.stripe.com/c/pay/cs_test_1');
+  assert.equal(body.url, 'https://checkout.stripe.com/c/pay/cs_test_00000001');
 
   assert.equal(stripe.calls.length, 1);
   assert.equal(stripe.calls[0].successUrl, `https://portal.test/invoices/${invoice.id}?checkout=complete`);
@@ -229,11 +284,32 @@ test('POST /api/invoices/:id/checkout on a paid invoice is refused', async () =>
   assert.equal(stripe.calls.length, 0);
 });
 
+test('POST /api/invoices/:id/checkout answers 503 when the Stripe call itself fails', async () => {
+  const logged: string[] = [];
+  const stripe: StripeGateway = {
+    createCheckoutSession: async () => {
+      throw new Error('stripe rate limit exceeded');
+    },
+    expireCheckoutSession: async () => {},
+  };
+  const sessions = new FakeSessions();
+  const deps = testDeps({ sessions, stripe, logError: (event: string) => logged.push(event) });
+  const app = createApp(deps);
+  const a = await seedBoundAccount(deps, sessions, { token: 'a', userId: 'user_a', name: 'Client A' });
+  const invoice = await seedInvoice(deps.db, deps.now, a.id);
+
+  const response = await call(app, 'POST', `/api/invoices/${invoice.id}/checkout`, 'a');
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: 'payments_unavailable' });
+  assert.deepEqual(logged, ['checkout_create_failed']);
+});
+
 test('POST /api/invoices/:id/checkout without Stripe configured is unavailable', async () => {
   const stripe: StripeGateway = {
     createCheckoutSession: async () => {
       throw Object.assign(new Error('stripe is not configured'), { code: 'stripe_not_configured' });
     },
+    expireCheckoutSession: async () => {},
   };
   const sessions = new FakeSessions();
   const deps = testDeps({ sessions, stripe });

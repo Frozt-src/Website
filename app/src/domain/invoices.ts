@@ -108,9 +108,11 @@ export async function createInvoice(db: D1Database, now: () => number, input: Cr
   return toInvoice(row);
 }
 
+// Both client-facing readers hide `draft`: an invoice that has not been issued is not the client's
+// to see, and a 404 keeps that indistinguishable from an invoice that does not exist.
 export async function getInvoiceForClient(db: D1Database, clientId: string, invoiceId: string): Promise<Invoice | null> {
   const row = await db
-    .prepare('SELECT * FROM invoices WHERE id = ? AND client_id = ?')
+    .prepare(`SELECT * FROM invoices WHERE id = ? AND client_id = ? AND status <> 'draft'`)
     .bind(invoiceId, clientId)
     .first<InvoiceRow>();
   return row ? toInvoice(row) : null;
@@ -118,8 +120,10 @@ export async function getInvoiceForClient(db: D1Database, clientId: string, invo
 
 export async function listInvoicesForClient(db: D1Database, clientId: string, status?: InvoiceStatus): Promise<Invoice[]> {
   const statement = status
-    ? db.prepare('SELECT * FROM invoices WHERE client_id = ? AND status = ? ORDER BY created_at DESC').bind(clientId, status)
-    : db.prepare('SELECT * FROM invoices WHERE client_id = ? ORDER BY created_at DESC').bind(clientId);
+    ? db
+        .prepare(`SELECT * FROM invoices WHERE client_id = ? AND status = ? AND status <> 'draft' ORDER BY created_at DESC`)
+        .bind(clientId, status)
+    : db.prepare(`SELECT * FROM invoices WHERE client_id = ? AND status <> 'draft' ORDER BY created_at DESC`).bind(clientId);
   const { results } = await statement.all<InvoiceRow>();
   return results.map(toInvoice);
 }

@@ -89,11 +89,22 @@ only, never live keys**:
   nothing about the response distinguishes "not yours" from "doesn't exist".
 - **Token design**: payment-link tokens are 32 cryptographically random bytes, base64url-encoded
   (43 characters). D1 stores only the SHA-256 hex digest (`payment_links.token_hash`); the
-  plaintext token is never logged, stored, or put in an audit row. Exactly one active link per
-  invoice is enforced by a partial unique index; issuing a new link revokes the old one in the
-  same batch. Malformed, unknown, revoked, or void-invoice tokens all render the same generic 404;
-  a paid invoice renders a distinct "already paid" page (number, amount, paid date) with no
-  payment action.
+  plaintext token is never logged, stored, put in an audit row, or handed to a third party.
+  Exactly one active link per invoice is enforced by a partial unique index; issuing a new link
+  revokes the old one in the same batch. Malformed, unknown, revoked, draft-invoice or
+  void-invoice tokens all render the same generic 404; a paid invoice renders a distinct "already
+  paid" page (number, amount, paid date) with no payment action.
+- **Token-free Stripe round trip**: the `success_url` and `cancel_url` given to Stripe are
+  `/checkout/complete` and `/checkout/cancel` with Stripe's `{CHECKOUT_SESSION_ID}` placeholder, on
+  the origin the request arrived on. Those pages resolve the invoice through the Checkout Session
+  id recorded on the `payments` row, so no token reaches Stripe, the payer's address bar, or the
+  stored event payload — `payment_events.payload_json` additionally drops `success_url`,
+  `cancel_url` and `url` from every event it stores.
+- **No indexing, no caching**: every pay-host response sends `X-Robots-Tag: noindex, nofollow` (and
+  the HTML a matching `<meta name="robots">`), because on that host the url *is* the
+  authorisation; every portal `/api/*` response sends `Cache-Control: no-store`, because it is
+  tenant-scoped billing data. The unknown-host 404 goes out with the pay host's header set, so no
+  response leaves the Worker without security headers.
 - **Webhook idempotency**: `payment_events.stripe_event_id` is `UNIQUE`. The event-insert and
   every resulting state change are written in one atomic `db.batch()`, so a replayed event either
   applies nothing (the unique violation is caught and reported as a no-op) or applies everything —
@@ -122,11 +133,21 @@ Checkout Session):
 
 | From | Trigger | To |
 |---|---|---|
-| `pending` | `checkout.session.completed`, already paid | `succeeded` |
+| `pending` / `processing` / `canceled` | `checkout.session.completed`, already paid | `succeeded` |
 | `pending` | `checkout.session.completed`, not yet paid (ACH) | `processing` |
-| `processing` | `checkout.session.async_payment_succeeded` | `succeeded` |
+| `pending` / `processing` / `canceled` / `failed` | `checkout.session.async_payment_succeeded` | `succeeded` |
 | `pending` / `processing` | `checkout.session.async_payment_failed` | `failed` |
 | `pending` | `checkout.session.expired`, or superseded by a new Checkout Session for the same invoice | `canceled` |
+
+`canceled` is a legal source state for a settlement because a session this Worker replaced stays
+payable at Stripe for a short cushion; a payment Stripe actually charged is always recorded, with
+its payment intent. An invoice transition only fires when the payment row reached the matching
+state in the same batch, so out-of-order delivery cannot strand an invoice in `processing`.
+
+`payments.method` is **best-effort in Phase 1 and usually `null`**. Under Stripe's automatic
+payment methods a Checkout Session lists every method enabled on the account, so the value is only
+recorded when the session offered exactly one. A later phase will read the method actually used
+from the PaymentIntent (`latest_charge.payment_method_details.type`).
 
 ## Activation checklist (owner, in order — all outside Phase 1)
 
@@ -135,24 +156,32 @@ access the owner holds.
 
 1. Create a Clerk **development** instance for local/staging work (portal origin, session
    settings); later create a Clerk **production** instance for `https://portal.mnlith.dev`.
-2. Create Stripe **test** API keys, and in the Stripe Dashboard enable the `card` and
+2. Set `CLERK_PUBLISHABLE_KEY` and `CLERK_FRONTEND_API_URL` in `app/wrangler.jsonc` `vars`, for
+   both the production block and the `dev` env, from the Clerk instance created in step 1. Both
+   values are public, not secrets. **Without them the portal renders "Portal is not configured"**
+   (`GET /api/public-config` returns an empty key) and the portal CSP is built with no Clerk
+   origin, so Clerk's script would be blocked even once the key is set.
+3. Create Stripe **test** API keys, and in the Stripe Dashboard enable the `card` and
    `us_bank_account` payment methods for Checkout.
-3. Create the remote D1 database: `wrangler d1 create monolith-app`, then set the returned
+4. Create the remote D1 database: `wrangler d1 create monolith-app`, then set the returned
    `database_id` in `app/wrangler.jsonc`.
-4. Set the four secrets on the deployed Worker: `wrangler secret put CLERK_SECRET_KEY`,
+5. Set the four secrets on the deployed Worker: `wrangler secret put CLERK_SECRET_KEY`,
    `CLERK_JWT_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` (`--config app/wrangler.jsonc`).
-5. Apply migrations to the remote database:
+6. Apply migrations to the remote database:
    `wrangler d1 migrations apply monolith-app --config app/wrangler.jsonc --remote`.
-6. Decide on Workers Paid (this Worker has a script, unlike the assets-only site Worker, so it
+7. Decide on Workers Paid (this Worker has a script, unlike the assets-only site Worker, so it
    counts against request/CPU limits).
-7. Add Custom Domains `pay.mnlith.dev` and `portal.mnlith.dev` to the `monolith-app` Worker
+8. Add Custom Domains `pay.mnlith.dev` and `portal.mnlith.dev` to the `monolith-app` Worker
    (requires owner DNS approval, as with the original `mnlith.dev` cutover).
-8. Configure the Stripe webhook endpoint `https://pay.mnlith.dev/api/stripe/webhook` for the
+9. Configure the Stripe webhook endpoint `https://pay.mnlith.dev/api/stripe/webhook` for the
    events `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
-   `checkout.session.async_payment_failed`, `checkout.session.expired`; copy the signing secret
-   into `STRIPE_WEBHOOK_SECRET`.
-9. Before relying on any of the above, run a full test-mode Checkout end to end with
-   `stripe listen --forward-to localhost:8788/api/stripe/webhook` running locally first.
+   `checkout.session.async_payment_failed`, `checkout.session.expired`, `charge.refunded`,
+   `charge.dispute.created`, `charge.dispute.closed`; copy the signing secret into
+   `STRIPE_WEBHOOK_SECRET`. The last three change no state in Phase 1 — they are recorded in
+   `payment_events` and linked to the payment they belong to, so the refund and dispute history
+   the design asks for is actually there.
+10. Before relying on any of the above, run a full test-mode Checkout end to end with
+    `stripe listen --forward-to localhost:8788/api/stripe/webhook` running locally first.
 
 ## Privacy notice changes required before activation
 

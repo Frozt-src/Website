@@ -24,6 +24,8 @@ export interface CheckoutSessionInput {
 }
 export interface StripeGateway {
   createCheckoutSession(input: CheckoutSessionInput): Promise<{ id: string; url: string }>;
+  // Closes a session we are replacing, so only one live session per invoice exists at Stripe.
+  expireCheckoutSession(sessionId: string): Promise<void>;
 }
 export interface StripeEvent {
   id: string;

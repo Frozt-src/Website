@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { AppDeps } from '../deps.ts';
 import { resolvePaymentLink } from '../domain/payment-links.ts';
-import { startCheckout } from '../domain/payments.ts';
+import { invoiceForPaymentLinkSession, startCheckout } from '../domain/payments.ts';
 import { listInvoiceItems } from '../domain/invoices.ts';
 import {
   cancelPage,
@@ -17,11 +17,9 @@ import {
 } from '../pay/render.ts';
 import { payCss } from '../pay/styles.ts';
 
-function payBaseUrl(host: string): string {
-  // The dev host `pay.localhost` is served over plain http; every other host is https.
-  const scheme = host === 'pay.localhost' ? 'http' : 'https';
-  return `${scheme}://${host}`;
-}
+// Stripe substitutes the literal placeholder when it redirects the payer back.
+const sessionIdPlaceholder = '{CHECKOUT_SESSION_ID}';
+const checkoutSessionId = /^cs_(test|live)_[A-Za-z0-9]{8,}$/;
 
 function hasErrorCode(error: unknown, code: string): boolean {
   return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === code;
@@ -54,41 +52,49 @@ export function createPayRoutes(deps: AppDeps) {
     if (!resolved) return html(c, notFoundPage(), 404);
 
     const { invoice, client, link } = resolved;
-    const base = payBaseUrl(deps.hosts.pay);
+    // The origin the payer actually reached us on, so the dev port survives the Stripe round trip.
+    const base = new URL(c.req.url).origin;
     try {
       const { url } = await startCheckout(deps.db, deps, {
         invoice,
         client,
         source: 'payment_link',
         paymentLinkId: link.id,
-        successUrl: `${base}/i/${token}/complete`,
-        cancelUrl: `${base}/i/${token}/cancel`,
+        successUrl: `${base}/checkout/complete?session_id=${sessionIdPlaceholder}`,
+        cancelUrl: `${base}/checkout/cancel?session_id=${sessionIdPlaceholder}`,
       });
       return c.redirect(url, 303);
     } catch (error) {
       // Not open (e.g. already paid): send the payer back to the invoice, no session created.
       if (hasErrorCode(error, 'invoice_not_payable')) return c.redirect(`${base}/i/${token}`, 303);
       if (hasErrorCode(error, 'stripe_not_configured')) return html(c, unavailablePage(), 503);
-      throw error;
+      // Any other Stripe failure (rate limit, network, rejected amount) is the payer's problem to
+      // retry, not a bare 500. The error itself never reaches the response.
+      deps.logError('checkout_create_failed', error);
+      return html(c, unavailablePage(), 503);
     }
   });
 
-  app.get('/i/:token/complete', async c => {
-    const token = c.req.param('token');
-    const resolved = await resolvePaymentLink(deps.db, deps.now, token);
-    if (!resolved) return html(c, notFoundPage(), 404);
+  // Stripe returns the payer here with the session id only; the token never leaves the Worker.
+  const invoiceForReturn = async (sessionId: string | undefined) => {
+    if (!sessionId || !checkoutSessionId.test(sessionId)) return null;
+    return invoiceForPaymentLinkSession(deps.db, sessionId);
+  };
+
+  app.get('/checkout/complete', async c => {
+    const invoice = await invoiceForReturn(c.req.query('session_id'));
+    if (!invoice) return html(c, notFoundPage(), 404);
 
     const year = new Date(deps.now() * 1000).getUTCFullYear();
-    return html(c, completePage({ invoice: resolved.invoice, token, year }), 200);
+    return html(c, completePage({ invoice, year }), 200);
   });
 
-  app.get('/i/:token/cancel', async c => {
-    const token = c.req.param('token');
-    const resolved = await resolvePaymentLink(deps.db, deps.now, token);
-    if (!resolved) return html(c, notFoundPage(), 404);
+  app.get('/checkout/cancel', async c => {
+    const invoice = await invoiceForReturn(c.req.query('session_id'));
+    if (!invoice) return html(c, notFoundPage(), 404);
 
     const year = new Date(deps.now() * 1000).getUTCFullYear();
-    return html(c, cancelPage({ token, year }), 200);
+    return html(c, cancelPage({ year }), 200);
   });
 
   app.get('/pay.css', c =>

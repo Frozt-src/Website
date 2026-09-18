@@ -26,9 +26,13 @@ function configured(value: string | undefined): boolean {
 // Without Stripe credentials the Worker still serves everything else; only paying is unavailable.
 function stripeFor(env: Env): StripeGateway {
   if (configured(env.STRIPE_SECRET_KEY)) return stripeGateway(env.STRIPE_SECRET_KEY);
+  const notConfigured = () => Object.assign(new Error('stripe is not configured'), { code: 'stripe_not_configured' });
   return {
     createCheckoutSession: async () => {
-      throw Object.assign(new Error('stripe is not configured'), { code: 'stripe_not_configured' });
+      throw notConfigured();
+    },
+    expireCheckoutSession: async () => {
+      throw notConfigured();
     },
   };
 }
@@ -47,10 +51,21 @@ function logError(event: string, error: unknown): void {
   console.error(JSON.stringify({ event, error: error instanceof Error ? error.name : 'unknown' }));
 }
 
-// The origins a session JWT may have been issued for; locally the Vite dev server proxies to 8788.
-function authorizedParties(portalHost: string): string[] {
+// The origins a session JWT may have been issued for. Locally that is the Worker itself (8788) and
+// the Vite dev server, which serves the portal on 5173 (or 5174 when that port is taken) and only
+// proxies /api to the Worker — so the JWT's azp claim is the Vite origin, not the Worker's.
+// Exported for the test that pins this list; nothing else imports it.
+export function authorizedParties(portalHost: string): string[] {
   const origins = [`https://${portalHost}`];
-  if (portalHost === 'localhost') origins.push('http://localhost:8788');
+  if (portalHost === 'localhost') {
+    origins.push(
+      'http://localhost:8788',
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'http://localhost:5174',
+      'http://127.0.0.1:5174',
+    );
+  }
   return origins;
 }
 

@@ -42,11 +42,17 @@ export class FakeClerkUsers implements ClerkUsers {
 
 export class FakeStripe implements StripeGateway {
   calls: CheckoutSessionInput[] = [];
+  expired: string[] = [];
   private counter = 0;
   async createCheckoutSession(input: CheckoutSessionInput): Promise<{ id: string; url: string }> {
     this.calls.push(input);
     this.counter++;
-    return { id: `cs_test_${this.counter}`, url: `https://checkout.stripe.com/c/pay/cs_test_${this.counter}` };
+    // Shaped like a real Stripe id, so tests exercise the session-id validation the return routes do.
+    const id = `cs_test_${String(this.counter).padStart(8, '0')}`;
+    return { id, url: `https://checkout.stripe.com/c/pay/${id}` };
+  }
+  async expireCheckoutSession(sessionId: string): Promise<void> {
+    this.expired.push(sessionId);
   }
 }
 

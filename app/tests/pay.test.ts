@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApp } from '../src/app.ts';
 import { createPaymentLink, revokePaymentLink } from '../src/domain/payment-links.ts';
-import { testDeps, payUrl } from './helpers/app.ts';
+import { startCheckout } from '../src/domain/payments.ts';
+import { testDeps, payUrl, FakeStripe } from './helpers/app.ts';
 import { seedClient, seedInvoice } from './helpers/fixtures.ts';
 import type { AppDeps, StripeGateway } from '../src/deps.ts';
 import type { Invoice } from '../src/domain/models.ts';
@@ -44,6 +45,19 @@ async function revokeLinkFor(deps: AppDeps, invoiceId: string): Promise<void> {
 
 async function payments(deps: AppDeps): Promise<PaymentRow[]> {
   return (await deps.db.prepare('SELECT id, source, payment_link_id FROM payments').all<PaymentRow>()).results;
+}
+
+// A payment-link checkout taken all the way through the pay host, so the return routes have a real
+// Stripe session id to resolve.
+async function startLinkCheckout(deps: AppDeps): Promise<{ invoice: Invoice; token: string; sessionId: string }> {
+  const { invoice, token } = await seedOpenInvoiceLink(deps);
+  await createApp(deps).fetch(new Request(payUrl(`/i/${token}/checkout`), { method: 'POST' }));
+  const row = await deps.db
+    .prepare('SELECT stripe_checkout_session_id AS id FROM payments WHERE invoice_id = ?')
+    .bind(invoice.id)
+    .first<{ id: string }>();
+  if (!row) throw new Error('checkout did not create a payment');
+  return { invoice, token, sessionId: row.id };
 }
 
 test('a malformed token renders the generic not-found page', async () => {
@@ -93,6 +107,21 @@ test('an open invoice renders the pay page with the exact security headers', asy
   assert.equal(response.headers.get('Content-Security-Policy'), payCsp);
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
   assert.equal(response.headers.get('Referrer-Policy'), 'no-referrer');
+});
+
+test('pay-host pages are kept out of search indexes by header and meta tag', async () => {
+  const deps = testDeps();
+  const app = createApp(deps);
+  const { token } = await seedOpenInvoiceLink(deps);
+
+  const page = await app.fetch(new Request(payUrl(`/i/${token}`)));
+  assert.equal(page.headers.get('X-Robots-Tag'), 'noindex, nofollow');
+  assert.match(await page.text(), /<meta name="robots" content="noindex, nofollow">/);
+
+  const missing = await app.fetch(new Request(payUrl(`/i/${'c'.repeat(43)}`)));
+  assert.equal(missing.status, 404);
+  assert.equal(missing.headers.get('X-Robots-Tag'), 'noindex, nofollow');
+  assert.match(await missing.text(), /<meta name="robots" content="noindex, nofollow">/);
 });
 
 test('an open invoice page shows the wordmark, number, description, items, amount and a checkout form', async () => {
@@ -211,6 +240,7 @@ test('checkout returns 503 with an HTML message when Stripe is not configured', 
     createCheckoutSession: async () => {
       throw Object.assign(new Error('stripe is not configured'), { code: 'stripe_not_configured' });
     },
+    expireCheckoutSession: async () => {},
   };
   const deps = testDeps({ stripe });
   const app = createApp(deps);
@@ -221,51 +251,153 @@ test('checkout returns 503 with an HTML message when Stripe is not configured', 
   assert.match(await response.text(), /Payments are not available right now/);
 });
 
-test('the complete page shows Payment received for a paid invoice', async () => {
+test('a Stripe failure renders the unavailable page and logs the event without the error text', async () => {
+  const logged: string[] = [];
+  const stripe: StripeGateway = {
+    createCheckoutSession: async () => {
+      throw new Error('stripe rate limit exceeded');
+    },
+    expireCheckoutSession: async () => {},
+  };
+  const deps = testDeps({ stripe, logError: (event: string) => logged.push(event) });
+  const app = createApp(deps);
+  const { token } = await seedOpenInvoiceLink(deps);
+
+  const response = await app.fetch(new Request(payUrl(`/i/${token}/checkout`), { method: 'POST' }));
+  const body = await response.text();
+
+  assert.equal(response.status, 503);
+  assert.match(body, /Payments are not available right now/);
+  assert.ok(!body.includes('rate limit'));
+  assert.deepEqual(logged, ['checkout_create_failed']);
+});
+
+test('the checkout return urls carry the session id, never the payment-link token', async () => {
+  const deps = testDeps();
+  const stripe = deps.stripe as FakeStripe;
+  const app = createApp(deps);
+  const { token } = await seedOpenInvoiceLink(deps);
+
+  await app.fetch(new Request(payUrl(`/i/${token}/checkout`), { method: 'POST' }));
+
+  assert.equal(stripe.calls.length, 1);
+  assert.equal(stripe.calls[0].successUrl, 'https://pay.test/checkout/complete?session_id={CHECKOUT_SESSION_ID}');
+  assert.equal(stripe.calls[0].cancelUrl, 'https://pay.test/checkout/cancel?session_id={CHECKOUT_SESSION_ID}');
+  assert.ok(!stripe.calls[0].successUrl.includes(token));
+  assert.ok(!stripe.calls[0].cancelUrl.includes(token));
+});
+
+test('the checkout return urls keep the port the request arrived on', async () => {
+  const deps = testDeps();
+  const stripe = deps.stripe as FakeStripe;
+  const app = createApp(deps);
+  const { token } = await seedOpenInvoiceLink(deps);
+
+  await app.fetch(new Request(`http://pay.test:8788/i/${token}/checkout`, { method: 'POST' }));
+
+  assert.equal(stripe.calls[0].successUrl, 'http://pay.test:8788/checkout/complete?session_id={CHECKOUT_SESSION_ID}');
+  assert.equal(stripe.calls[0].cancelUrl, 'http://pay.test:8788/checkout/cancel?session_id={CHECKOUT_SESSION_ID}');
+});
+
+test('the complete page shows Payment received with the invoice number, amount and paid date', async () => {
   const deps = testDeps();
   const app = createApp(deps);
-  const { invoice, token } = await seedOpenInvoiceLink(deps);
+  const { invoice, sessionId } = await startLinkCheckout(deps);
   await setInvoiceStatus(deps, invoice.id, 'paid');
 
-  const response = await app.fetch(new Request(payUrl(`/i/${token}/complete`)));
+  const response = await app.fetch(new Request(payUrl(`/checkout/complete?session_id=${sessionId}`)));
+  const body = await response.text();
+
   assert.equal(response.status, 200);
-  assert.match(await response.text(), /Payment received/);
+  assert.match(body, /Payment received/);
+  assert.match(body, new RegExp(invoice.number));
+  assert.match(body, /\$100\.00/);
+  assert.match(body, /2023-11-14/);
 });
 
 test('the complete page mentions processing for a processing invoice', async () => {
   const deps = testDeps();
   const app = createApp(deps);
-  const { invoice, token } = await seedOpenInvoiceLink(deps);
+  const { invoice, sessionId } = await startLinkCheckout(deps);
   await setInvoiceStatus(deps, invoice.id, 'processing');
 
-  const response = await app.fetch(new Request(payUrl(`/i/${token}/complete`)));
+  const response = await app.fetch(new Request(payUrl(`/checkout/complete?session_id=${sessionId}`)));
   assert.equal(response.status, 200);
-  assert.match(await response.text(), /processing/i);
+  assert.match(await response.text(), /Your bank payment is processing/);
 });
 
-test('the complete page shows a confirming message and a link back, with no meta refresh or script, while the invoice is still open', async () => {
+test('the complete page confirms without a token or a script while the invoice is still open', async () => {
   const deps = testDeps();
   const app = createApp(deps);
-  const { token } = await seedOpenInvoiceLink(deps);
+  const { token, sessionId } = await startLinkCheckout(deps);
 
-  const response = await app.fetch(new Request(payUrl(`/i/${token}/complete`)));
+  const response = await app.fetch(new Request(payUrl(`/checkout/complete?session_id=${sessionId}`)));
   const body = await response.text();
 
   assert.equal(response.status, 200);
   assert.match(body, /confirming/i);
-  assert.match(body, new RegExp(`href="/i/${token}"`));
+  assert.ok(!body.includes(token));
   assert.ok(!body.includes('<script'));
   assert.ok(!body.toLowerCase().includes('http-equiv="refresh"'));
 });
 
-test('the cancel page links back to the invoice', async () => {
+test('the cancel page points the payer back at their invoice email and carries no token', async () => {
+  const deps = testDeps();
+  const app = createApp(deps);
+  const { token, sessionId } = await startLinkCheckout(deps);
+
+  const response = await app.fetch(new Request(payUrl(`/checkout/cancel?session_id=${sessionId}`)));
+  const body = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.match(body, /Your payment was cancelled/);
+  assert.match(body, /link from your invoice email/);
+  assert.ok(!body.includes(token));
+});
+
+for (const [name, query] of [
+  ['malformed', '?session_id=not-a-session'],
+  ['too short', '?session_id=cs_test_abc'],
+  ['missing', ''],
+  ['unknown', '?session_id=cs_test_unknownsession'],
+] as [string, string][]) {
+  test(`a ${name} session id renders the generic not-found page on both return routes`, async () => {
+    const deps = testDeps();
+    const app = createApp(deps);
+    await startLinkCheckout(deps);
+
+    for (const path of ['/checkout/complete', '/checkout/cancel']) {
+      const response = await app.fetch(new Request(payUrl(`${path}${query}`)));
+      assert.equal(response.status, 404);
+      assert.match(await response.text(), /Page not found/);
+    }
+  });
+}
+
+test('a portal checkout session is not resolvable through the pay-host return routes', async () => {
+  const deps = testDeps();
+  const app = createApp(deps);
+  const client = await seedClient(deps.db, deps.now);
+  const invoice = await seedInvoice(deps.db, deps.now, client.id);
+  const { payment } = await startCheckout(deps.db, deps, {
+    invoice,
+    client,
+    source: 'portal',
+    successUrl: 'https://portal.test/invoices/x?checkout=complete',
+    cancelUrl: 'https://portal.test/invoices/x?checkout=cancelled',
+  });
+
+  const response = await app.fetch(new Request(payUrl(`/checkout/complete?session_id=${payment.stripeCheckoutSessionId}`)));
+  assert.equal(response.status, 404);
+});
+
+test('the old token-bearing return routes no longer exist', async () => {
   const deps = testDeps();
   const app = createApp(deps);
   const { token } = await seedOpenInvoiceLink(deps);
 
-  const response = await app.fetch(new Request(payUrl(`/i/${token}/cancel`)));
-  assert.equal(response.status, 200);
-  assert.match(await response.text(), new RegExp(`href="/i/${token}"`));
+  assert.equal((await app.fetch(new Request(payUrl(`/i/${token}/complete`)))).status, 404);
+  assert.equal((await app.fetch(new Request(payUrl(`/i/${token}/cancel`)))).status, 404);
 });
 
 test('the stylesheet is served as css with a long cache lifetime', async () => {

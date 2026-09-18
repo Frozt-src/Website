@@ -5,11 +5,17 @@ import { testDeps, payUrl, portalUrl } from './helpers/app.ts';
 
 const payCsp = "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self' https://checkout.stripe.com; base-uri 'none'; frame-ancestors 'none'";
 
-test('an unknown host returns a generic 404', async () => {
+test('an unknown host returns a generic 404 that still carries the security headers', async () => {
   const app = createApp(testDeps());
   const response = await app.fetch(new Request('https://unknown.test/healthz'));
   assert.equal(response.status, 404);
   assert.deepEqual(await response.json(), { error: 'not_found' });
+  // No response leaves the Worker without headers, including the one built outside both Hono apps.
+  assert.equal(response.headers.get('Content-Security-Policy'), payCsp);
+  assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff');
+  assert.equal(response.headers.get('X-Frame-Options'), 'DENY');
+  assert.equal(response.headers.get('Strict-Transport-Security'), 'max-age=31536000; includeSubDomains');
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
 });
 
 test('the reserved admin host returns 404', async () => {

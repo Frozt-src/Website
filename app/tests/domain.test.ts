@@ -83,19 +83,28 @@ test('getInvoiceForClient returns null when the invoice belongs to another clien
   assert.equal(await getInvoiceForClient(deps.db, clientB.id, invoice.id), null);
   const own = await getInvoiceForClient(deps.db, clientA.id, invoice.id);
   assert.equal(own?.id, invoice.id);
+
+  // A draft has not been issued to the client, so it does not exist as far as they are concerned.
+  const draft = await seedInvoice(deps.db, deps.now, clientA.id, { status: 'draft' });
+  assert.equal(await getInvoiceForClient(deps.db, clientA.id, draft.id), null);
 });
 
-test('listInvoicesForClient orders newest first and filters by status', async () => {
+test('listInvoicesForClient orders newest first, filters by status and never returns drafts', async () => {
   const deps = testDeps();
   const client = await seedClient(deps.db, deps.now);
   const older = await seedInvoice(deps.db, () => 1_700_000_001, client.id, { status: 'open' });
-  const newer = await seedInvoice(deps.db, () => 1_700_000_002, client.id, { status: 'draft' });
+  const newer = await seedInvoice(deps.db, () => 1_700_000_002, client.id, { status: 'open' });
+  const draft = await seedInvoice(deps.db, () => 1_700_000_003, client.id, { status: 'draft' });
 
   const all = await listInvoicesForClient(deps.db, client.id);
   assert.deepEqual(all.map(invoice => invoice.id), [newer.id, older.id]);
+  assert.ok(!all.some(invoice => invoice.id === draft.id));
 
   const openOnly = await listInvoicesForClient(deps.db, client.id, 'open');
-  assert.deepEqual(openOnly.map(invoice => invoice.id), [older.id]);
+  assert.deepEqual(openOnly.map(invoice => invoice.id), [newer.id, older.id]);
+
+  // An unissued invoice is not the client's business, whatever they ask for.
+  assert.deepEqual(await listInvoicesForClient(deps.db, client.id, 'draft'), []);
 });
 
 test('outstandingBalanceCents counts open and processing invoices only', async () => {
