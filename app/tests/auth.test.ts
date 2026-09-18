@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApp } from '../src/app.ts';
+import { resolveMembership } from '../src/auth/membership.ts';
 import { newId } from '../src/domain/ids.ts';
 import { outstandingBalanceCents } from '../src/domain/invoices.ts';
 import { testDeps, portalUrl, FakeSessions, FakeClerkUsers } from './helpers/app.ts';
@@ -160,6 +161,27 @@ test('membership binding matches the email case-insensitively', async () => {
   const response = await get(app, '/api/me', 'token');
   assert.equal(response.status, 200);
   assert.equal((await response.json()).membership.id, membershipId);
+});
+
+test('concurrent first logins both resolve the one invited membership', async () => {
+  const { deps, clerkUsers } = setup();
+  const client = await seedClient(deps.db, deps.now, { name: 'Alex Industries' });
+  const membershipId = await seedMembership(deps.db, deps.now, { clientId: client.id, email: 'alex@example.com' });
+  clerkUsers.set('user_1', 'alex@example.com');
+
+  // The loser of the race sees changes = 0 because the other request just bound the row, not because
+  // no invited row exists. It must still resolve instead of turning into a 403 no_account.
+  const [first, second] = await Promise.all([
+    resolveMembership(deps.db, deps, 'user_1'),
+    resolveMembership(deps.db, deps, 'user_1'),
+  ]);
+  assert.equal(first?.membership.id, membershipId);
+  assert.equal(second?.membership.id, membershipId);
+
+  const audit = await deps.db
+    .prepare(`SELECT id FROM audit_events WHERE action = 'membership.bound'`)
+    .all<{ id: string }>();
+  assert.equal(audit.results.length, 1);
 });
 
 test('an unverified Clerk email never binds a membership', async () => {

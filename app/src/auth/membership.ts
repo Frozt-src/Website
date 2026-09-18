@@ -96,7 +96,9 @@ export async function resolveMembership(
         ORDER BY created_at LIMIT 1)`)
     .bind(userId, at, at, email)
     .run();
-  if (update.meta.changes === 0) return null;
+  // changes = 0 also happens when a concurrent request bound the row between the select above and
+  // this update, so re-check before refusing: only a genuinely missing invited row gives up here.
+  if (update.meta.changes === 0) return findActiveMembership(db, userId);
 
   const resolved = await findActiveMembership(db, userId);
   if (!resolved) return null;
