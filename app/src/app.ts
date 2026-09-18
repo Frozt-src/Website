@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
+import type { MiddlewareHandler } from 'hono';
 import type { AppDeps } from './deps.ts';
 import { payHeaders, portalHeaders } from './http/headers.ts';
 
-function applyHeaders(headers: Record<string, string>) {
-  return async (c: any, next: () => Promise<void>) => {
+function applyHeaders(headers: Record<string, string>): MiddlewareHandler {
+  return async (c, next) => {
     await next();
     for (const [key, value] of Object.entries(headers)) c.res.headers.set(key, value);
   };
