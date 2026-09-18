@@ -82,7 +82,7 @@ async function notify(mailer: SendEmail, id: string, receivedAt: number, data: R
         data.message,
       ].join('\n'),
     });
-  } catch (error) { logFailure('inquiry_notify_failed', error); }
+  } catch (error) { logFailure('inquiry_notify_failed', new Error(error instanceof Error ? error.name : 'unknown')); } // provider messages may echo addresses
 }
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

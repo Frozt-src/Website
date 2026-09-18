@@ -10,6 +10,7 @@ Never touch these DNS records: MX (iCloud), TXT `v=spf1 include:icloud.com ~all`
 - [ ] Cloudflare → Domain Registration: auto-renew is on for mnlith.dev with a valid payment method.
 - [ ] Export the zone: Cloudflare → mnlith.dev → DNS → Records → Import and Export → Export (keep the file for rollback).
 - [ ] `npm ci && npm run deploy:check` succeeds on the release commit.
+- [ ] `npx wrangler whoami` shows the account that owns mnlith.dev (the Worker deploy must not stop at a login prompt mid-cutover).
 
 ## 1. Zone settings (no visible effect yet)
 
@@ -18,18 +19,28 @@ Never touch these DNS records: MX (iCloud), TXT `v=spf1 include:icloud.com ~all`
 - [ ] Confirm these are off for mnlith.dev because they inject scripts or cookies: Scrape Shield → Email Address Obfuscation; Speed → Rocket Loader; Zaraz; Web Analytics automatic setup; Security → Bot Fight Mode / JavaScript Detections.
 - [ ] Network → **Pseudo IPv4** is **Off** (or "Add header"), never "Overwrite headers" — the inquiry API rate-limits IPv6 visitors per /64 and needs their real address.
 
-## 2. Apex cutover (seconds of downtime)
+## 1a. Release the hardened inquiry API (independent of DNS)
 
-- [ ] DNS → Records: delete the four `A mnlith.dev` records `185.199.108.153`, `185.199.109.153`, `185.199.110.153`, `185.199.111.153`.
-- [ ] Immediately run `npm run deploy`. Wrangler attaches the Custom Domain and creates its DNS record and certificate.
+- [ ] `npm run api:check && npm run api:deploy` (tests run first).
+- [ ] `curl -sI https://api.mnlith.dev/health` returns `200` (the previous API version answered HEAD with 404).
+
+## 2. Apex cutover (brief downtime)
+
+Resolvers that look up mnlith.dev during the gap may cache the empty answer for up to 30 minutes, so do this at a quiet time and keep the gap short.
+
+- [ ] `npm test && npm run build` (so the deploy itself only uploads).
+- [ ] DNS → Records: delete every apex record that points at GitHub: the four `A mnlith.dev` records `185.199.108.153`, `185.199.109.153`, `185.199.110.153`, `185.199.111.153`, and any `AAAA mnlith.dev` records `2606:50c0:8000::153`–`2606:50c0:8003::153`.
+- [ ] Immediately run `npx wrangler deploy`. Wrangler attaches the Custom Domain and creates its DNS record and certificate.
+- [ ] Wait until `nslookup mnlith.dev 1.1.1.1` no longer returns `185.199.*` addresses (usually within 5 minutes; run `ipconfig /flushdns` first).
 - [ ] `npm run verify:site` shows every check PASS. `curl -sI http://mnlith.dev/` returns 301 to `https://mnlith.dev/`.
 
-If the deploy fails, re-create the four A records from the export to restore GitHub Pages, fix the problem, and retry.
+**Rollback (valid until step 5):** if the deploy fails, or any check in steps 2–4 fails, remove the Custom Domain (Workers & Pages → monolith-site → Settings → Domains & Routes → remove `mnlith.dev`), re-create the GitHub A/AAAA records from the export, and restore `www` to `CNAME frozt-src.github.io` (DNS only). GitHub Pages is still published, so the old site returns.
 
 ## 3. www
 
 - [ ] DNS → Records: edit `www` from `CNAME frozt-src.github.io` to `AAAA 100::`, **Proxied**.
 - [ ] `curl -sI "https://www.mnlith.dev/privacy?x=1"` returns 301 to `https://mnlith.dev/privacy?x=1`.
+- [ ] `curl -sI http://www.mnlith.dev/` returns a 301 (to https), and following redirects ends at `https://mnlith.dev/` (`curl -sIL http://www.mnlith.dev/ | grep -i ^location`).
 
 ## 4. Production checks
 
@@ -41,6 +52,7 @@ If the deploy fails, re-create the four A records from the export to restore Git
 
 ## 5. After at least 24 hours: take the site off GitHub
 
+- [ ] DNS → Records shows no record pointing at `185.199.*`, `2606:50c0:*` or `*.github.io`. Only then remove GitHub Pages; a leftover record would let another GitHub account claim the domain.
 - [ ] `gh api -X DELETE repos/Frozt-src/Website/pages` (removes GitHub Pages).
 - [ ] Review third-party GitHub App access (GitHub → Settings → Applications) such as Qodo and the ChatGPT Codex connector, and remove any you don't want reading a private repository.
 - [ ] Turn on Dependabot alerts and security updates for the repository.

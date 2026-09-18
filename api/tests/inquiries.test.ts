@@ -168,7 +168,7 @@ test('a failing purge still runs the other purge and fails the invocation', asyn
 
 function mailer(fail = false) {
   const sent: any[] = [];
-  return { sent, NOTIFY: { async send(message: any) { if (fail) throw new Error('Email Sending unavailable'); sent.push(message); return {messageId:'test'}; } } };
+  return { sent, NOTIFY: { async send(message: any) { if (fail) throw new Error('Rejected reply-to alex@example.com'); sent.push(message); return {messageId:'test'}; } } };
 }
 function context() {
   const pending: Promise<unknown>[] = [];
@@ -198,6 +198,7 @@ test('a failed notification is logged and never changes the saved response', asy
   await Promise.all(pending);
   assert.equal(sql.prepare('SELECT COUNT(*) n FROM inquiries').get()?.n, 1);
   assert.ok(logged.mock.calls.some(call => JSON.parse(String(call.arguments[0])).event === 'inquiry_notify_failed'));
+  assert.ok(logged.mock.calls.every(call => !String(call.arguments[0]).includes('alex@example.com')));
   sql.close();
 });
 test('rejected and rate-limited submissions are never emailed', async () => {

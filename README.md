@@ -25,18 +25,21 @@ The site is an assets-only Cloudflare Worker named `monolith-site` (`wrangler.js
 
 With Node 24 and Wrangler signed in to the Cloudflare account that owns `mnlith.dev` (`npx wrangler login`, then `npx wrangler whoami`):
 
+**First deploy only:** follow `docs/cloudflare-cutover.md` and run the first deploy only at its step 2. Until then, if Wrangler offers to replace existing DNS records for `mnlith.dev`, answer **No**.
+
     npm ci
     npm run deploy:check   # build + wrangler dry run
     npm run deploy         # tests, build, deploy
     npm run verify:site    # checks headers, caching, 404, privacy page and security.txt on https://mnlith.dev
+    npm run api:deploy     # inquiry API (separate Worker): run whenever api/ changes
 
-To roll back, check out the previous commit and run `npm run deploy` again. `VITE_API_URL` is an optional public build-time override for the API address, never a secret. The CSP's `connect-src` follows it.
+To roll back instantly, run `npx wrangler rollback` (or Workers & Pages → monolith-site → Deployments); `npx wrangler rollback --config api/wrangler.jsonc` does the same for the API. Deploy the site in one step with `npm run deploy`, never as a gradual percentage rollout, because hashed `/assets/*` responses (including 404s) are cached for a year. `VITE_API_URL` is an optional public build-time override for the API address, never a secret. The CSP's `connect-src` follows it.
 
-Optional: connect the repository in Cloudflare → Workers & Pages → monolith-site → Settings → Builds (Workers Builds, which works with private repositories). Then pushes to `main` deploy automatically. GitHub Actions isn't used.
+Optional: connect the repository in Cloudflare → Workers & Pages → monolith-site → Settings → Builds (Workers Builds, which works with private repositories), with build command `npm test && npm run build` and deploy command `npx wrangler deploy`. Then pushes to `main` deploy the site automatically. The API still deploys with `npm run api:deploy`. GitHub Actions isn't used.
 
 The one-time move from GitHub Pages is documented in `docs/cloudflare-cutover.md`.
 
-The backend is deployed separately with `npm run api:deploy` after the database migration and `RATE_LIMIT_SECRET` are configured. Do not publish with the placeholder database UUID. See the backend documentation for provisioning and verification.
+The backend is deployed separately with `npm run api:deploy` after the database migration and `RATE_LIMIT_SECRET` are configured. See the backend documentation for provisioning and verification.
 
 ## Receiving inquiries
 
