@@ -170,6 +170,14 @@ export async function startCheckout(
   return { url: session.url, payment: toPayment(row) };
 }
 
+export async function listPaymentsForInvoice(db: D1Database, invoiceId: string): Promise<Payment[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM payments WHERE invoice_id = ? ORDER BY created_at')
+    .bind(invoiceId)
+    .all<PaymentRow>();
+  return results.map(toPayment);
+}
+
 export type StripeEventOutcome = 'applied' | 'ignored' | 'unmatched' | 'mismatch' | 'duplicate';
 
 // `duplicate` is never stored: the UNIQUE(stripe_event_id) violation rolls the whole batch back.
