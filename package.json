@@ -21,6 +21,7 @@
     "api:check": "wrangler deploy --dry-run --config api/wrangler.jsonc",
     "app:dev": "wrangler dev --config app/wrangler.jsonc --env dev --port 8788",
     "app:migrate:local": "wrangler d1 migrations apply monolith-app --local --config app/wrangler.jsonc --env dev",
+    "app:seed": "node app/scripts/seed-dev.mjs",
     "app:build": "vite build --config app/portal/vite.config.ts",
     "app:portal:dev": "vite --config app/portal/vite.config.ts --host 127.0.0.1",
     "app:portal:preview": "vite --config app/portal/vite.config.ts --host 127.0.0.1 --mode preview",

@@ -55,6 +55,10 @@ LIMIT 50;
 
 There is no public inbox endpoint. The daily scheduled job deletes inquiries older than 90 days and expired rate-limit records. Cloudflare provider backups and service logs follow its own policies. Direct email links open the visitor's email application.
 
+## Application platform (app/)
+
+`app/` holds a separate application: an opaque-link payment page, an authenticated client portal, a server-side API, and its own D1 database (`monolith-app`), built as a third Cloudflare Worker distinct from the marketing site and the inquiry API. It is **not deployed yet** — there is no production Worker, D1 database, Custom Domain, or webhook configured for it. See `app/README.md` for how to run it locally, its security model, and the checklist the owner still needs to complete before it goes live.
+
 ## Source and assets
 
 - `src/`: frontend components, content, styles and motion.
