@@ -26,6 +26,9 @@ function createPortalApp(deps: AppDeps) {
   app.use('*', applyHeaders(portalHeaders(deps.clerkFrontendApiUrl)));
   app.get('/healthz', c => c.json({ status: 'ok' }));
   app.get('/api/public-config', c => c.json({ clerkPublishableKey: deps.clerkPublishableKey }));
+  // The Stripe webhook is a pay-host route; reserving the path here keeps the portal's answer a plain
+  // 404 instead of the 401 that requireClient would give every unknown /api path.
+  app.all('/api/stripe/webhook', c => c.json({ error: 'not_found' }, 404));
   // Registered after public-config, so that one public route still answers before requireClient.
   app.route('/api', createPortalApi(deps));
   app.notFound(c => {

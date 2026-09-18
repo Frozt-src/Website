@@ -545,13 +545,16 @@ test('the webhook route does not exist on the portal host', async () => {
   const { payment: created } = await openCheckout(deps);
   const app = createApp(deps);
 
-  // The portal API gate answers first for any unknown /api path, so the webhook is unreachable here.
   const response = await app.fetch(new Request(portalUrl('/api/stripe/webhook'), {
     method: 'POST',
     headers: { 'stripe-signature': 'valid' },
     body: JSON.stringify(checkoutEvent('checkout.session.completed', paidSession(created))),
   }));
 
-  assert.equal(response.status, 401);
+  assert.equal(response.status, 404);
+  assert.deepEqual(await response.json(), { error: 'not_found' });
   assert.equal((await events(deps)).length, 0);
+
+  // The path is reserved for the pay host whatever the method, so it never reaches the portal auth gate.
+  assert.equal((await app.fetch(new Request(portalUrl('/api/stripe/webhook')))).status, 404);
 });
