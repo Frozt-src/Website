@@ -13,19 +13,26 @@
     "deploy": "npm test && npm run build && wrangler deploy",
     "deploy:check": "npm run build && wrangler deploy --dry-run",
     "verify:site": "node scripts/verify-site.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p api/tsconfig.json",
-    "test": "node --test api/tests/*.test.ts",
-    "test:watch": "node --test --watch api/tests/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p api/tsconfig.json && tsc --noEmit -p app/tsconfig.json",
+    "test": "node --test api/tests/*.test.ts app/tests/*.test.ts",
+    "test:watch": "node --test --watch api/tests/*.test.ts app/tests/*.test.ts",
     "api:dev": "wrangler dev --config api/wrangler.jsonc",
     "api:deploy": "npm test && wrangler deploy --config api/wrangler.jsonc",
-    "api:check": "wrangler deploy --dry-run --config api/wrangler.jsonc"
+    "api:check": "wrangler deploy --dry-run --config api/wrangler.jsonc",
+    "app:dev": "wrangler dev --config app/wrangler.jsonc --env dev --port 8788",
+    "app:migrate:local": "wrangler d1 migrations apply monolith-app --local --config app/wrangler.jsonc --env dev",
+    "app:check": "npm run typecheck && wrangler deploy --dry-run --config app/wrangler.jsonc"
   },
   "dependencies": {
+    "@clerk/backend": "3.18.1",
+    "@clerk/clerk-react": "5.61.3",
     "@fontsource/manrope": "^5.3.0",
     "@fontsource/space-grotesk": "^5.3.0",
+    "hono": "4.13.8",
     "motion": "13.4.0",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "stripe": "22.6.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260917.1",

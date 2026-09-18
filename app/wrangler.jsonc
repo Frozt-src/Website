@@ -1,0 +1,48 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "monolith-app",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./dist/portal",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "not_found_handling": "single-page-application"
+  },
+  "vars": {
+    "PAY_HOST": "pay.mnlith.dev",
+    "PORTAL_HOST": "portal.mnlith.dev",
+    "ADMIN_HOST": "admin.mnlith.dev",
+    "STRIPE_MODE": "test",
+    "CLERK_PUBLISHABLE_KEY": "",
+    "CLERK_FRONTEND_API_URL": ""
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "monolith-app",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "migrations"
+  }],
+  "observability": { "enabled": true, "logs": { "invocation_logs": false }, "traces": { "enabled": false } },
+  "env": {
+    "dev": {
+      "vars": {
+        "PAY_HOST": "pay.localhost",
+        "PORTAL_HOST": "localhost",
+        "ADMIN_HOST": "admin.localhost",
+        "STRIPE_MODE": "test",
+        "CLERK_PUBLISHABLE_KEY": "",
+        "CLERK_FRONTEND_API_URL": ""
+      },
+      "d1_databases": [{
+        "binding": "DB",
+        "database_name": "monolith-app",
+        "database_id": "00000000-0000-0000-0000-000000000000",
+        "migrations_dir": "migrations"
+      }]
+    }
+  }
+}

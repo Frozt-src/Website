@@ -1,0 +1,5 @@
+# Copy to app/.dev.vars (git-ignored). Test-mode / development keys only. Never live keys.
+CLERK_SECRET_KEY=sk_test_replace_me
+CLERK_JWT_KEY=
+STRIPE_SECRET_KEY=sk_test_replace_me
+STRIPE_WEBHOOK_SECRET=whsec_replace_me
