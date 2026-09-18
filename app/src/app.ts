@@ -2,13 +2,18 @@ import { Hono } from 'hono';
 import type { MiddlewareHandler } from 'hono';
 import type { AppDeps } from './deps.ts';
 import { payHeaders, portalHeaders } from './http/headers.ts';
+import { createPayRoutes } from './http/pay.ts';
 import { createPortalApi } from './http/portal-api.ts';
 import { stripeWebhookHandler } from './http/webhook.ts';
 
 function applyHeaders(headers: Record<string, string>): MiddlewareHandler {
   return async (c, next) => {
     await next();
-    for (const [key, value] of Object.entries(headers)) c.res.headers.set(key, value);
+    // A route that already set one of these (e.g. /pay.css caching its own Cache-Control) keeps
+    // its value; every other response gets the host's default.
+    for (const [key, value] of Object.entries(headers)) {
+      if (!c.res.headers.has(key)) c.res.headers.set(key, value);
+    }
   };
 }
 
@@ -17,6 +22,7 @@ function createPayApp(deps: AppDeps) {
   app.use('*', applyHeaders(payHeaders()));
   app.get('/healthz', c => c.json({ status: 'ok' }));
   app.post('/api/stripe/webhook', stripeWebhookHandler(deps));
+  app.route('/', createPayRoutes(deps));
   app.notFound(c => c.json({ error: 'not_found' }, 404));
   return app;
 }
