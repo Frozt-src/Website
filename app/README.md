@@ -175,12 +175,12 @@ access the owner holds.
    origin, so Clerk's script would be blocked even once the key is set.
 3. Create Stripe **test** API keys, and in the Stripe Dashboard enable the `card` and
    `us_bank_account` payment methods for Checkout.
-4. Create the remote D1 database: `wrangler d1 create monolith-app`, then set the returned
-   `database_id` in `app/wrangler.jsonc`.
+4. Create the remote D1 database: `wrangler d1 create monolith-app-production`, then set the
+   returned `database_id` in `app/wrangler.jsonc`.
 5. Set the four secrets on the deployed Worker: `wrangler secret put CLERK_SECRET_KEY`,
    `CLERK_JWT_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` (`--config app/wrangler.jsonc`).
 6. Apply migrations to the remote database:
-   `wrangler d1 migrations apply monolith-app --config app/wrangler.jsonc --remote`.
+   `wrangler d1 migrations apply monolith-app-production --config app/wrangler.jsonc --remote`.
 7. Decide on Workers Paid (this Worker has a script, unlike the assets-only site Worker, so it
    counts against request/CPU limits).
 8. Add Custom Domains `pay.mnlith.dev` and `portal.mnlith.dev` to the `monolith-app` Worker
