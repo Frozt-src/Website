@@ -63,14 +63,26 @@ out of `npm run app:build`'s production output.
 (`node:sqlite`) against the real migration files, with Clerk and Stripe replaced by fakes injected
 through `createApp(deps: AppDeps)`. No network access, no real credentials.
 
+## Environments
+
+`app/wrangler.jsonc` defines three environments. Test data never shares a database with
+production billing data.
+
+| Environment | D1 database | Secrets | Notes |
+|---|---|---|---|
+| `dev` (`--env dev`, the default for local work) | local D1 emulation (`.wrangler/state`); the config entry names `monolith-app-staging` but local emulation ignores the `database_id` | `app/.dev.vars` (test keys) | `npm run app:dev`, `npm run app:migrate:local`, `npm run app:seed` |
+| `staging` (`--env staging`) | `monolith-app-staging` (real remote D1) | `app/.dev.vars.staging` (test keys) | `npm run app:migrate:staging`; `npm run app:seed -- --staging --i-understand-remote-staging`; deploy is `npm run app:deploy:staging`, documented but never run in Phase 1 |
+| production (no `--env`, the top-level config) | `monolith-app-production` (`database_id` is a placeholder until the owner runs `wrangler d1 create`) | real keys, set only via `wrangler secret put` | never targeted by `app:seed`; no flag exists to seed production |
+
 ## Environment and secrets
 
 Public config lives in `app/wrangler.jsonc` (`vars`): `PAY_HOST`, `PORTAL_HOST`, `ADMIN_HOST`,
 `STRIPE_MODE`, `CLERK_PUBLISHABLE_KEY`, `CLERK_FRONTEND_API_URL`. None of these are secret — the
 publishable key is served to the portal at `GET /api/public-config`.
 
-Secrets go in `app/.dev.vars` (git-ignored; copy from `.dev.vars.example`), **test-mode keys
-only, never live keys**:
+Secrets go in `app/.dev.vars` (git-ignored; copy from `.dev.vars.example`) for the `dev`
+environment, or `app/.dev.vars.staging` for the `staging` environment, **test-mode keys only,
+never live keys**:
 
 | Key | Purpose |
 |---|---|

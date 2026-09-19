@@ -1,7 +1,10 @@
 #!/usr/bin/env node
-// Seeds the local D1 database (`app/.wrangler/state`) with one demo client so the pay page and
-// portal have something to show in local development. Node built-ins only, no dependencies.
+// Seeds a demo client so the pay page and portal have something to show. By default this targets
+// the local D1 database (`app/.wrangler/state`). With --staging --i-understand-remote-staging it
+// targets the remote staging D1 (`monolith-app-staging`) instead; there is no flag to target
+// production. Node built-ins only, no dependencies.
 // Usage: node app/scripts/seed-dev.mjs [--email <address>] [--reset]
+//        node app/scripts/seed-dev.mjs --staging --i-understand-remote-staging [--email <address>] [--reset]
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { execSync } from 'node:child_process';
@@ -17,6 +20,8 @@ const clientName = 'Example Co';
 function parseArgs(argv) {
   let email = 'client@example.com';
   let reset = false;
+  let staging = false;
+  let iUnderstandRemoteStaging = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--email') {
@@ -24,11 +29,20 @@ function parseArgs(argv) {
       if (!email) throw new Error('--email requires a value');
     } else if (arg === '--reset') {
       reset = true;
+    } else if (arg === '--staging') {
+      staging = true;
+    } else if (arg === '--i-understand-remote-staging') {
+      iUnderstandRemoteStaging = true;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
-  return { email, reset };
+  if (staging && !iUnderstandRemoteStaging) {
+    throw new Error(
+      '--staging writes to the remote staging D1 database; pass --i-understand-remote-staging to confirm.',
+    );
+  }
+  return { email, reset, staging };
 }
 
 // execSync always runs through a shell, so array args are not auto-quoted for us; only the pieces
@@ -44,7 +58,7 @@ function runWranglerJson(args) {
 }
 
 function runWranglerFile(sqlPath) {
-  const command = `npx ${['wrangler', 'd1', 'execute', 'monolith-app', '--local', '--config', wranglerConfig, '--env', 'dev', '--json', '--file', sqlPath].map(quoteArg).join(' ')}`;
+  const command = `npx ${['wrangler', 'd1', 'execute', databaseName, resourceFlag, '--config', wranglerConfig, '--env', envName, '--json', '--file', sqlPath].map(quoteArg).join(' ')}`;
   execSync(command, { cwd: repoRoot, encoding: 'utf8' });
 }
 
@@ -68,17 +82,20 @@ function insertService({ id, clientId, name, description, startedAt }) {
     VALUES (${sqlString(id)}, ${sqlString(clientId)}, ${sqlString(name)}, ${sqlString(description)}, 'active', ${startedAt}, ${now}, ${now});`;
 }
 
-const { email, reset } = parseArgs(process.argv.slice(2));
+const { email, reset, staging } = parseArgs(process.argv.slice(2));
+const databaseName = 'monolith-app-staging';
+const envName = staging ? 'staging' : 'dev';
+const resourceFlag = staging ? '--remote' : '--local';
 const now = Math.floor(Date.now() / 1000);
 const day = 86400;
 
 const existing = runWranglerJson([
-  'd1', 'execute', 'monolith-app', '--local', '--config', wranglerConfig, '--env', 'dev', '--json',
+  'd1', 'execute', databaseName, resourceFlag, '--config', wranglerConfig, '--env', envName, '--json',
   '--command', `SELECT id FROM clients WHERE name = ${sqlString(clientName)} LIMIT 1`,
 ])[0].results[0];
 
 if (existing && !reset) {
-  console.error(`A client named "${clientName}" already exists in the local database (id ${existing.id}).`);
+  console.error(`A client named "${clientName}" already exists in the ${envName} database (id ${existing.id}).`);
   console.error('Re-run with --reset to delete the seeded rows and recreate them.');
   process.exit(1);
 }
@@ -193,4 +210,8 @@ try {
 
 console.log(`Seeded "${clientName}" with invoices MON-00001 (open), MON-00002 (paid), MON-00003 (draft).`);
 console.log(`Invited email: ${email}`);
-console.log(`Pay URL: http://pay.localhost:8788/i/${token}`);
+if (staging) {
+  console.log(`Seeded into remote staging D1 (${databaseName}). Token: ${token}`);
+} else {
+  console.log(`Pay URL: http://pay.localhost:8788/i/${token}`);
+}

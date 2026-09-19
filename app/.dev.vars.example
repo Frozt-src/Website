@@ -1,4 +1,7 @@
 # Copy to app/.dev.vars (git-ignored). Test-mode / development keys only. Never live keys.
+# For the staging environment, copy to app/.dev.vars.staging instead (git-ignored); `wrangler
+# --env staging` loads that file automatically. Test-mode keys only there too — staging is not
+# production.
 CLERK_SECRET_KEY=sk_test_replace_me
 CLERK_JWT_KEY=
 STRIPE_SECRET_KEY=sk_test_replace_me

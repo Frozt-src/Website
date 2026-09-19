@@ -20,12 +20,14 @@
     "api:deploy": "npm test && wrangler deploy --config api/wrangler.jsonc",
     "api:check": "wrangler deploy --dry-run --config api/wrangler.jsonc",
     "app:dev": "wrangler dev --config app/wrangler.jsonc --env dev --port 8788",
-    "app:migrate:local": "wrangler d1 migrations apply monolith-app --local --config app/wrangler.jsonc --env dev",
+    "app:migrate:local": "wrangler d1 migrations apply monolith-app-staging --local --config app/wrangler.jsonc --env dev",
+    "app:migrate:staging": "wrangler d1 migrations apply monolith-app-staging --remote --config app/wrangler.jsonc --env staging",
     "app:seed": "node app/scripts/seed-dev.mjs",
     "app:build": "vite build --config app/portal/vite.config.ts",
     "app:portal:dev": "vite --config app/portal/vite.config.ts --host 127.0.0.1",
     "app:portal:preview": "vite --config app/portal/vite.config.ts --host 127.0.0.1 --mode preview",
-    "app:check": "npm run typecheck && npm run app:build && wrangler deploy --dry-run --config app/wrangler.jsonc"
+    "app:check": "npm run typecheck && npm run app:build && wrangler deploy --dry-run --config app/wrangler.jsonc && wrangler deploy --dry-run --config app/wrangler.jsonc --env staging",
+    "app:deploy:staging": "npm test && npm run app:build && wrangler deploy --config app/wrangler.jsonc --env staging"
   },
   "dependencies": {
     "@clerk/backend": "3.18.1",
