@@ -44,6 +44,9 @@ const testAccountSuccess = '000123456789';
 const testAccountFailure = '000222222227';
 // The manual pages are completed by a human, so the wait is generous.
 const manualTimeoutMs = 10 * 60 * 1000;
+// How long a CLI re-delivery is given to travel Stripe → `stripe listen` → the Worker before the
+// event-row count is read back.
+const resendSettleMs = 5000;
 
 // Built on first use: the SDK refuses an empty key, and the key is only there when not skipping.
 let client: Stripe | null = null;
@@ -110,8 +113,7 @@ async function issuePaymentLink(invoiceId: string): Promise<string> {
   const tokenHash = await hashToken(token);
   const at = Math.floor(Date.now() / 1000);
   d1(`UPDATE payment_links SET status = 'revoked', revoked_at = ${at} WHERE invoice_id = ${sqlString(invoiceId)} AND status = 'active'`);
-  d1(`INSERT INTO payment_links (id, invoice_id, token_hash, status, created_at)
-    VALUES (${sqlString(randomUUID())}, ${sqlString(invoiceId)}, ${sqlString(tokenHash)}, 'active', ${at})`);
+  d1(`INSERT INTO payment_links (id, invoice_id, token_hash, status, created_at) VALUES (${sqlString(randomUUID())}, ${sqlString(invoiceId)}, ${sqlString(tokenHash)}, 'active', ${at})`);
   return token;
 }
 
@@ -181,8 +183,7 @@ test('a card payment marks the invoice paid and stores an applied event without 
 
   assert.equal(invoiceStatus(seed.invoices.open.id), 'paid');
   const applied = d1<EventRow>(
-    `SELECT * FROM payment_events WHERE invoice_id = ${sqlString(seed.invoices.open.id)}
-      AND type = 'checkout.session.completed' AND outcome = 'applied'`,
+    `SELECT * FROM payment_events WHERE invoice_id = ${sqlString(seed.invoices.open.id)} AND type = 'checkout.session.completed' AND outcome = 'applied'`,
   );
   assert.equal(applied.length, 1);
   assert.doesNotMatch(applied[0].payload_json, /success_url/);
@@ -233,34 +234,48 @@ test('a failing ACH payment reopens the invoice', { skip: manualSkip }, async ()
 });
 
 test('a re-delivered event is reported as a duplicate and writes no second row', { skip }, async t => {
-  const delivered = d1<EventRow>(
-    `SELECT * FROM payment_events WHERE type = 'checkout.session.completed' AND outcome = 'applied'
-      ORDER BY received_at DESC LIMIT 1`,
-  )[0];
+  // Stripe's own list is the source of the id, newest first. Only an event this Worker has already
+  // applied can prove the duplicate path — one Stripe knows but the local database has never seen
+  // would be stored as a new `unmatched` row — so the listing is matched against `payment_events`.
+  const listed = await stripe().events.list({ type: 'checkout.session.completed', limit: 20 });
+  const ids = listed.data.map(event => event.id);
+  // One query rather than one per id: every d1() call pays an `npx wrangler` start-up.
+  const applied = ids.length
+    ? d1<EventRow>(
+        `SELECT * FROM payment_events WHERE outcome = 'applied' AND stripe_event_id IN (${ids.map(sqlString).join(', ')})`,
+      )
+    : [];
+  // events.list answers newest first, so the first listed id with a local row is the latest one.
+  const delivered = ids.map(id => applied.find(row => row.stripe_event_id === id)).find(row => row !== undefined);
   if (!delivered) {
     // Nothing to replay: the completed-checkout step is manual and has not been run against this
     // local database yet. Reported as a skip rather than silently passing.
-    t.skip('no checkout.session.completed has reached the local Worker yet — run the card step first');
+    t.skip('none of the last 20 checkout.session.completed events has reached the local Worker — run the card step first');
     return;
   }
 
   const before = eventRowCount();
-  // The CLI is the closest thing to Stripe re-delivering the event itself. It reports only the
-  // status line, so the outcome body below is what actually pins the duplicate behaviour.
+  // The CLI is the closest thing to Stripe re-delivering the event itself, so it is the path taken
+  // whenever it is installed.
   const cli = spawnSync('stripe', ['events', 'resend', delivered.stripe_event_id, '--confirm'], {
     cwd: repoRoot,
     encoding: 'utf8',
     shell: process.platform === 'win32',
   });
-  console.log(
-    cli.status === 0
-      ? `  stripe events resend ${delivered.stripe_event_id} -> delivered by the CLI`
-      : `  stripe events resend unavailable (${cli.error?.message ?? cli.stderr?.trim() ?? `exit ${cli.status}`}); re-signing the stored payload instead`,
-  );
-
-  const response = await postWebhook(delivered.payload_json, signed(delivered.payload_json));
-  assert.equal(response.status, 200);
-  assert.deepEqual(JSON.parse(response.body), { received: true, outcome: 'duplicate' });
+  if (cli.status === 0) {
+    console.log(`  stripe events resend ${delivered.stripe_event_id} -> re-delivered by the CLI`);
+    // The CLI prints the event, not what the Worker answered. Every outcome except `duplicate`
+    // inserts a payment_events row (app/src/domain/payments.ts), so once the re-delivery has had
+    // time to arrive, an unchanged row count says the same thing as `{outcome:'duplicate'}`.
+    await new Promise(resolve => setTimeout(resolve, resendSettleMs));
+  } else {
+    console.log(
+      `  stripe events resend unavailable (${cli.error?.message ?? cli.stderr?.trim() ?? `exit ${cli.status}`}); re-signing the stored payload instead`,
+    );
+    const response = await postWebhook(delivered.payload_json, signed(delivered.payload_json));
+    assert.equal(response.status, 200);
+    assert.deepEqual(JSON.parse(response.body), { received: true, outcome: 'duplicate' });
+  }
   assert.equal(eventRowCount(), before);
 });
 

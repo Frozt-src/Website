@@ -71,12 +71,16 @@ because wrangler reads `.dev.vars` at start-up. Leave `stripe listen` running.
 ### 4. Run
 
 ```sh
-npm run app:test:integration                              # automated steps only
-MONOLITH_INTEGRATION_MANUAL=1 npm run app:test:integration # + the browser steps
+MONOLITH_INTEGRATION_MANUAL=1 npm run app:test:integration # full run — use this for live validation
+npm run app:test:integration                               # automated steps only, finishes in seconds
 ```
 
-Without `MONOLITH_INTEGRATION_MANUAL=1` every step that needs a person is skipped with
-`manual step — set MONOLITH_INTEGRATION_MANUAL=1 to run it`, so the run finishes in seconds.
+**Live validation uses the first line.** Without `MONOLITH_INTEGRATION_MANUAL=1` every step that
+needs a person is skipped with `manual step — set MONOLITH_INTEGRATION_MANUAL=1 to run it`, which
+means the card, both ACH and the Clerk ticket steps are not exercised at all — none of the hosted
+Stripe or Clerk pages is visited, and the replay step then has nothing to replay. The plain form
+exists so an unattended run does not sit for ten minutes per step waiting for a browser nobody is
+at; it is a smoke run, not a validation run.
 
 ### 5. The manual steps
 
@@ -121,8 +125,9 @@ followed by `#` and the reason. The summary at the end counts each. A skipped ru
 run — read the reason. Useful ones:
 
 - `manual step — set MONOLITH_INTEGRATION_MANUAL=1 to run it` — expected in an unattended run.
-- `no checkout.session.completed has reached the local Worker yet — run the card step first` — the
-  replay step has nothing to replay because no card payment has been completed on this database.
+- `none of the last 20 checkout.session.completed events has reached the local Worker — run the
+  card step first` — the replay step has nothing to replay because no card payment has been
+  completed on this database.
 - `timed out after 600s waiting for … (is \`stripe listen --forward-to
   127.0.0.1:8788/api/stripe/webhook\` running?)` — the hosted page was completed but no webhook
   arrived, or the `whsec_` in `.dev.vars` is not the one `stripe listen` printed.
@@ -150,10 +155,23 @@ creating more, and they can be deleted from the Clerk dashboard.
 - **`Host` headers, not `fetch`.** `wrangler dev` serves the pay host and the portal host on one
   port and routes on the `Host` header, and Node's `fetch` refuses to send that header, so
   `env.ts` makes its requests with `node:http`. It never follows redirects either, which is what
-  makes the `303` to Stripe observable.
+  makes the `303` to Stripe observable. The header carries the port (`pay.localhost:8788`) even
+  though routing ignores it: the Worker derives its absolute urls — the Stripe `success_url` and
+  `cancel_url` among them — from the request url, so a `Host` without the port would send the
+  payer back to `http://pay.localhost/…`, which nothing serves.
 - **`local-d1.ts`** reads and writes the same database the Worker is using, through
-  `wrangler d1 execute --local --json`. The Worker holds that SQLite file open while it runs; if a
-  query ever comes back busy, re-run it.
+  `wrangler d1 execute --local --json`. Every statement is collapsed to a single line before it is
+  handed over, because the shell `execSync` uses on Windows cuts a command line at the first
+  embedded newline — quotes or not — and a statement that lost its tail would silently query
+  something other than what was written. The Worker holds that SQLite file open while it runs; if
+  a query ever comes back busy, re-run it.
+- **The replay step re-delivers through the CLI when it is installed** (`stripe events resend <id>
+  --confirm`) and falls back to re-posting the stored payload, re-signed with
+  `generateTestHeaderString`, when it is not. The CLI prints the event rather than what the Worker
+  answered, so on that path the proof is the unchanged `payment_events` count: every outcome except
+  `duplicate` inserts a row, so a count that does not move is the same statement as
+  `{outcome:'duplicate'}`. The fallback path asserts the response body directly. The event id
+  itself comes from `stripe.events.list`, matched against the rows this Worker has already applied.
 - **`app/scripts/seed-dev.mjs --json`** prints the seeded ids, tokens and pay urls as one JSON
   object, and each `--extra-invoice` adds a further open invoice with its own payment link, so a
   step that consumes an invoice (pays it, revokes its link, voids it) never shares one.

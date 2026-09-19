@@ -44,7 +44,10 @@ function httpRequest(host: string, path: string, init: HttpInit = {}): Promise<H
         port: workerPort,
         path,
         method: init.method ?? 'GET',
-        headers: { Host: host, ...init.headers },
+        // The port belongs in the Host header: wrangler routes on the hostname alone, but the
+        // Worker builds its absolute urls from the request url, so a Host without it would give
+        // Stripe a success_url of http://pay.localhost/… that nothing serves.
+        headers: { Host: `${host}:${workerPort}`, ...init.headers },
       },
       response => {
         let body = '';

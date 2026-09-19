@@ -18,7 +18,12 @@ export function sqlString(value: string): string {
 }
 
 export function d1<T>(sql: string): T[] {
-  const args = ['wrangler', 'd1', 'execute', databaseName, '--local', '--config', wranglerConfig, '--env', 'dev', '--json', '--command', sql];
+  // cmd.exe — the shell execSync goes through on Windows — cuts the command line at the first
+  // embedded newline, quotes or not, so a statement written across lines would reach wrangler
+  // truncated. Collapsing the whitespace here is what stops a call site reintroducing that; the
+  // values these statements interpolate (ids, tokens, emails) never contain whitespace themselves.
+  const flat = sql.replace(/\s+/g, ' ').trim();
+  const args = ['wrangler', 'd1', 'execute', databaseName, '--local', '--config', wranglerConfig, '--env', 'dev', '--json', '--command', flat];
   const stdout = execSync(`npx ${args.map(quoteArg).join(' ')}`, { cwd: repoRoot, encoding: 'utf8' });
   return (JSON.parse(stdout.trim()) as { results: T[] }[])[0].results;
 }
