@@ -176,7 +176,7 @@ test('a card payment marks the invoice paid and stores an applied event without 
   console.log(`  Pay with Stripe's test card ${testCard}, any future expiry, any CVC.\n`);
 
   await waitFor({
-    label: `the card payment on ${seed.invoices.open.number} to reach 'succeeded' (is \`stripe listen --forward-to pay.localhost:8788/api/stripe/webhook\` running?)`,
+    label: `the card payment on ${seed.invoices.open.number} to reach 'succeeded' (is \`stripe listen --forward-to 127.0.0.1:8788/api/stripe/webhook\` running?)`,
     timeoutMs: manualTimeoutMs,
     probe: () => (paymentFor(seed.invoices.open.id)?.status === 'succeeded' ? true : null),
   });

@@ -247,7 +247,7 @@ try {
 
 // Staging is reached over its own hostname, so only a local seed can name a working pay URL.
 function payUrl(linkToken) {
-  return staging ? null : `http://pay.localhost:8788/i/${linkToken}`;
+  return staging ? null : `http://127.0.0.1:8788/i/${linkToken}`;
 }
 
 function invoiceJson(id, number, totalCents, linkToken) {
@@ -275,7 +275,7 @@ if (json) {
   if (staging) {
     console.log(`Seeded into remote staging D1 (${databaseName}). Token: ${token}`);
   } else {
-    console.log(`Pay URL: http://pay.localhost:8788/i/${token}`);
+    console.log(`Pay URL: http://127.0.0.1:8788/i/${token}`);
   }
   for (const extra of extras) {
     console.log(staging ? `${extra.number} (open). Token: ${extra.token}` : `${extra.number} (open) pay URL: ${payUrl(extra.token)}`);

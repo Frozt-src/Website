@@ -27,16 +27,15 @@ $ npm run app:test:integration
 | `STRIPE_SECRET_KEY` is a real `sk_test_` key | `app/.dev.vars has no real STRIPE_SECRET_KEY (still the .dev.vars.example placeholder)` |
 | `STRIPE_WEBHOOK_SECRET` is a real `whsec_` secret | as above, for `STRIPE_WEBHOOK_SECRET` |
 | `CLERK_SECRET_KEY` is a real `sk_test_` key | as above, for `CLERK_SECRET_KEY` |
-| a Worker answers `GET /healthz` on `127.0.0.1:8788` with `Host: pay.localhost` | ``no Worker on http://127.0.0.1:8788 (connect ECONNREFUSED 127.0.0.1:8788) — run `npm run app:dev` `` |
+| a Worker answers `GET /healthz` on `127.0.0.1:8788` with `Host: 127.0.0.1:8788` | ``no Worker on http://127.0.0.1:8788 (connect ECONNREFUSED 127.0.0.1:8788) — run `npm run app:dev` `` |
 
 One precondition **cannot** be checked from here: `stripe listen` has to be forwarding webhooks to
 the local Worker. Nothing tells the test whether it is running, so a step that depends on a webhook
 waits and then fails with a message naming `stripe listen --forward-to
-pay.localhost:8788/api/stripe/webhook`.
+127.0.0.1:8788/api/stripe/webhook`.
 
-`pay.localhost` must resolve to `127.0.0.1` for the Stripe CLI. Chrome resolves `*.localhost` on
-its own, but the Stripe CLI does not always; if `ping pay.localhost` fails, add `127.0.0.1
-pay.localhost` to `C:\Windows\System32\drivers\etc\hosts` (Windows).
+The pay surface is served on `127.0.0.1` and the portal on `localhost` in development so that the
+hostname router can tell them apart without a hosts-file entry.
 
 ## Runbook
 
@@ -65,13 +64,12 @@ In a second terminal:
 
 ```sh
 stripe login
-stripe listen --forward-to pay.localhost:8788/api/stripe/webhook
+stripe listen --forward-to 127.0.0.1:8788/api/stripe/webhook
 ```
 
 The Worker routes by exact hostname, so the webhook must be forwarded to the pay host
-(`pay.localhost:8788`), not `127.0.0.1:8788` or plain `localhost:8788` — either of those gets a
-`404` from the Worker instead of reaching the webhook route. `pay.localhost` must resolve to
-`127.0.0.1` for the Stripe CLI (see the note above).
+(`127.0.0.1:8788`), not plain `localhost:8788` — that gets a `404` from the Worker instead of
+reaching the webhook route (`localhost` is the portal host).
 
 `stripe listen` prints a `whsec_…` signing secret **of its own** — it is not the dashboard endpoint
 secret. Copy it into `STRIPE_WEBHOOK_SECRET` in `app/.dev.vars` and **restart `npm run app:dev`**,
@@ -145,7 +143,7 @@ run — read the reason. Useful ones:
   card step first` — the replay step has nothing to replay because no card payment has been
   completed on this database.
 - `timed out after 600s waiting for … (is \`stripe listen --forward-to
-  pay.localhost:8788/api/stripe/webhook\` running?)` — the hosted page was completed but no webhook
+  127.0.0.1:8788/api/stripe/webhook\` running?)` — the hosted page was completed but no webhook
   arrived, or the `whsec_` in `.dev.vars` is not the one `stripe listen` printed.
 
 ### 7. Cleaning up
@@ -171,10 +169,10 @@ creating more, and they can be deleted from the Clerk dashboard.
 - **`Host` headers, not `fetch`.** `wrangler dev` serves the pay host and the portal host on one
   port and routes on the `Host` header, and Node's `fetch` refuses to send that header, so
   `env.ts` makes its requests with `node:http`. It never follows redirects either, which is what
-  makes the `303` to Stripe observable. The header carries the port (`pay.localhost:8788`) even
+  makes the `303` to Stripe observable. The header carries the port (`127.0.0.1:8788`) even
   though routing ignores it: the Worker derives its absolute urls — the Stripe `success_url` and
   `cancel_url` among them — from the request url, so a `Host` without the port would send the
-  payer back to `http://pay.localhost/…`, which nothing serves.
+  payer back to `http://127.0.0.1/…`, which nothing serves.
 - **`local-d1.ts`** reads and writes the same database the Worker is using, through
   `wrangler d1 execute --local --json`. Every statement is collapsed to a single line before it is
   handed over, because the shell `execSync` uses on Windows cuts a command line at the first

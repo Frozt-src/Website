@@ -13,7 +13,7 @@ export const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 // request's Host header. Node's fetch() refuses to send that header, so these use node:http.
 const workerHost = '127.0.0.1';
 const workerPort = 8788;
-const payHost = 'pay.localhost';
+const payHost = '127.0.0.1';
 const portalHost = 'localhost';
 
 export interface HttpResponse {
@@ -46,7 +46,7 @@ function httpRequest(host: string, path: string, init: HttpInit = {}): Promise<H
         method: init.method ?? 'GET',
         // The port belongs in the Host header: wrangler routes on the hostname alone, but the
         // Worker builds its absolute urls from the request url, so a Host without it would give
-        // Stripe a success_url of http://pay.localhost/… that nothing serves.
+        // Stripe a success_url of http://127.0.0.1/… that nothing serves.
         headers: { Host: `${host}:${workerPort}`, ...init.headers },
       },
       response => {

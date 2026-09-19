@@ -43,8 +43,10 @@ npm run app:build           # builds the portal SPA to app/dist/portal
 npm run app:dev             # wrangler dev on http://127.0.0.1:8788
 ```
 
-Then open the pay URL `app:seed` printed (e.g. `http://pay.localhost:8788/i/<token>`) and
-`http://localhost:8788/` for the portal. `app:migrate:local` and `app:seed` only ever touch the
+Then open the pay URL `app:seed` printed (e.g. `http://127.0.0.1:8788/i/<token>`) and
+`http://localhost:8788/` for the portal. The pay surface is served on `127.0.0.1` and the portal on
+`localhost` in development so that the hostname router can tell them apart without a hosts-file
+entry. `app:migrate:local` and `app:seed` only ever touch the
 local D1 under `app/.wrangler/state`; neither takes a `--remote` flag. `app:seed` also takes
 `--json` (the seeded ids, tokens and pay URLs as one JSON object on stdout instead of the summary)
 and `--extra-invoice` (repeat it once per additional open invoice, each with its own payment link),
@@ -231,10 +233,10 @@ access the owner holds.
    `payment_events` and linked to the payment they belong to, so the refund and dispute history
    the design asks for is actually there.
 10. Before relying on any of the above, run a full test-mode Checkout end to end with
-    `stripe listen --forward-to pay.localhost:8788/api/stripe/webhook` running locally first (the
+    `stripe listen --forward-to 127.0.0.1:8788/api/stripe/webhook` running locally first (the
     Worker routes by exact hostname, so the webhook must be forwarded to the pay host, not
-    `localhost:8788` or `127.0.0.1:8788`) — `app/tests/integration/README.md` is the runbook for
-    exactly that.
+    `localhost:8788`, which is the portal host) — `app/tests/integration/README.md` is the runbook
+    for exactly that.
 
 ## Privacy notice changes required before activation
 

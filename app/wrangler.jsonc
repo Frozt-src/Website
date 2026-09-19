@@ -49,7 +49,7 @@
     },
     "dev": {
       "vars": {
-        "PAY_HOST": "pay.localhost",
+        "PAY_HOST": "127.0.0.1",
         "PORTAL_HOST": "localhost",
         "ADMIN_HOST": "admin.localhost",
         "STRIPE_MODE": "test",
