@@ -15,6 +15,7 @@ Money is integer cents, currency always `usd`. Timestamps are Unix seconds. IDs 
 | `no_account` | A valid Clerk session with no matching membership. | Portal API, 403 |
 | `not_found` | The resource doesn't exist, or belongs to another client. | Portal API, 404; unknown route, 404 |
 | `invoice_not_payable` | The invoice's status is not `open`. | `POST /api/invoices/:id/checkout`, 409 |
+| `payment_in_progress` | Another checkout for this invoice already holds the claim on it. | `POST /api/invoices/:id/checkout`, 409 |
 | `payments_not_configured` | `STRIPE_SECRET_KEY` is unset. | `POST /api/invoices/:id/checkout`, 503 |
 | `payments_unavailable` | The Stripe API call failed (rate limit, network, rejected amount). | `POST /api/invoices/:id/checkout`, 503 |
 | `too_many_attempts` | Checkout attempt throttle exceeded for this member. | `POST /api/invoices/:id/checkout`, 429 |
@@ -115,11 +116,15 @@ PaymentIntent.
 Starts (or reuses a pending, unexpired) Stripe Checkout Session for the invoice.
 
 A pending session is reused only when it was created by this same channel (`source = 'portal'`); a
-pending pay-host session for the invoice is expired at Stripe and marked `canceled` first.
+pending pay-host session for the invoice is expired at Stripe and marked `canceled` first. Before
+calling Stripe, the invoice is claimed with a database insert enforcing at most one open payment
+row per invoice, so a request that loses that race either waits for the winner's session url or, if
+the claim it held is lost after Stripe already answered, reports `payment_in_progress`.
 
 - `201 { "url": "https://checkout.stripe.com/..." }`
 - `404 { "error": "not_found" }` — not the caller's invoice, or a `draft`
 - `409 { "error": "invoice_not_payable" }` — invoice status is not `open`
+- `409 { "error": "payment_in_progress" }` — another checkout for this invoice is already in flight
 - `429 { "error": "too_many_attempts", "retryAfterSeconds": 600 }` — more than 10 checkout POSTs
   from this member within the last 10 minutes; a `Retry-After` header carries the same value
 - `503 { "error": "payments_not_configured" }` — `STRIPE_SECRET_KEY` is unset
@@ -142,7 +147,7 @@ void-invoice token is a generic `404` HTML page in every case below.
 |---|---|
 | `GET /i/:token` | Renders the invoice (number, description, line items, amount due, a Pay form) for an `open` invoice; a distinct "already paid" page for `paid`; the generic 404 otherwise. |
 | `GET /i/:token` (invoice `processing`) | A distinct "payment processing" page for a settling ACH debit: number and status only, no line items, no amount, no Pay form. |
-| `POST /i/:token/checkout` | Creates (or reuses) a Stripe Checkout Session and `303`-redirects to it. If the invoice isn't payable, `303`s back to `/i/:token` instead of creating a session. If Stripe isn't configured or the Stripe call fails, renders the 503 "payments are not available right now" page. Throttled per payment link (10 POSTs per rolling 10-minute window): over the limit renders a branded `429` "too many payment attempts" page with a `Retry-After` header; page views (`GET /i/:token`) never count. |
+| `POST /i/:token/checkout` | Creates (or reuses) a Stripe Checkout Session and `303`-redirects to it. If the invoice isn't payable, `303`s back to `/i/:token` instead of creating a session. If another checkout already holds the invoice's claim, renders a branded `409` "payment already in progress" page. If Stripe isn't configured or the Stripe call fails, renders the 503 "payments are not available right now" page. Throttled per payment link (10 POSTs per rolling 10-minute window): over the limit renders a branded `429` "too many payment attempts" page with a `Retry-After` header; page views (`GET /i/:token`) never count. |
 | `GET /checkout/complete?session_id=cs_...` | Post-Checkout landing page; message depends on the invoice's current status (paid — with number, amount and paid date / processing / still confirming). |
 | `GET /checkout/cancel?session_id=cs_...` | Shown when the payer cancels out of Stripe Checkout. |
 | `GET /pay.css`, `GET /favicon.svg` | Static assets for the pay page (not user data). |

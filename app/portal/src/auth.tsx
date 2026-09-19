@@ -54,7 +54,7 @@ export function AuthApiProvider({ children }: { children: ReactNode }) {
         });
         const text = await response.text();
         const body: unknown = text ? JSON.parse(text) : {};
-        if (!response.ok) throw new ApiError(response.status, errorCode(body));
+        if (!response.ok) throw new ApiError(response.status, errorCode(body), body);
         return body;
       }),
     [getToken],

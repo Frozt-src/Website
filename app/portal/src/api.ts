@@ -59,12 +59,16 @@ export interface ServiceSummary {
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
+  // The parsed JSON error body, when there was one to parse, so a screen can read extra fields the
+  // route attached (e.g. `retryAfterSeconds` on `too_many_attempts`) without a second fetch.
+  readonly body: unknown;
 
-  constructor(status: number, code: string) {
+  constructor(status: number, code: string, body?: unknown) {
     super(code);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.body = body;
   }
 }
 

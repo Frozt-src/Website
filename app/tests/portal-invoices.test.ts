@@ -3,11 +3,33 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApp } from '../src/app.ts';
 import { newId } from '../src/domain/ids.ts';
-import { testDeps, portalUrl, FakeSessions, FakeClerkUsers, FakeStripe } from './helpers/app.ts';
+import { testDeps, portalUrl, FakeSessions, FakeClerkUsers, FakeStripe, json } from './helpers/app.ts';
 import { seedClient, seedInvoice } from './helpers/fixtures.ts';
 import { startCheckout } from '../src/domain/payments.ts';
 import type { AppDeps, StripeGateway } from '../src/deps.ts';
 import type { Client, Invoice } from '../src/domain/models.ts';
+
+interface InvoiceSummaryBody {
+  id: string;
+  number: string;
+  status: string;
+  totalCents: number;
+  currency: string;
+  description: string;
+  issuedAt: number | null;
+  dueAt: number | null;
+  paidAt: number | null;
+}
+interface InvoiceListBody {
+  invoices: InvoiceSummaryBody[];
+}
+interface InvoiceDetailBody extends InvoiceSummaryBody {
+  items: { id: string; description: string; quantity: number; unitCents: number; amountCents: number }[];
+  payments: { id: string; status: string; amountCents: number; method: string | null; createdAt: number; succeededAt: number | null }[];
+}
+interface CheckoutBody {
+  url: string;
+}
 
 function setup() {
   let clock = 1_700_000_000;
@@ -112,9 +134,9 @@ test('GET /api/invoices lists only the caller client invoices, newest first, wit
 
   const response = await call(app, 'GET', '/api/invoices', 'a');
   assert.equal(response.status, 200);
-  const body = await response.json() as any;
+  const body = await json<InvoiceListBody>(response);
   assert.deepEqual(
-    body.invoices.map((invoice: { id: string }) => invoice.id),
+    body.invoices.map(invoice => invoice.id),
     [second.id, first.id],
   );
   assert.deepEqual(body.invoices[0], invoiceFields(second));
@@ -129,8 +151,8 @@ test('GET /api/invoices?status= filters to that status', async () => {
 
   const response = await call(app, 'GET', '/api/invoices?status=paid', 'a');
   assert.equal(response.status, 200);
-  const body = await response.json() as any;
-  assert.deepEqual(body.invoices.map((invoice: { id: string }) => invoice.id), [paid.id]);
+  const body = await json<InvoiceListBody>(response);
+  assert.deepEqual(body.invoices.map(invoice => invoice.id), [paid.id]);
   assert.notEqual(open.id, paid.id);
 });
 
@@ -141,8 +163,8 @@ test('a draft invoice is never listed, readable or payable through the portal', 
   const draft = await seedInvoice(deps.db, deps.now, a.id, { description: 'Draft', status: 'draft' });
 
   const list = await call(app, 'GET', '/api/invoices', 'a');
-  const body = await list.json() as any;
-  assert.deepEqual(body.invoices.map((invoice: { id: string }) => invoice.id), [issued.id]);
+  const body = await json<InvoiceListBody>(list);
+  assert.deepEqual(body.invoices.map(invoice => invoice.id), [issued.id]);
 
   const detail = await call(app, 'GET', `/api/invoices/${draft.id}`, 'a');
   assert.equal(detail.status, 404);
@@ -161,8 +183,8 @@ test('a void invoice stays in the portal history but cannot be paid', async () =
   await setInvoiceStatus(deps, invoice.id, 'void');
 
   const list = await call(app, 'GET', '/api/invoices', 'a');
-  const body = await list.json() as any;
-  assert.deepEqual(body.invoices.map((row: { id: string }) => row.id), [invoice.id]);
+  const body = await json<InvoiceListBody>(list);
+  assert.deepEqual(body.invoices.map(row => row.id), [invoice.id]);
   assert.equal((await call(app, 'GET', `/api/invoices/${invoice.id}`, 'a')).status, 200);
 
   const checkout = await call(app, 'POST', `/api/invoices/${invoice.id}/checkout`, 'a');
@@ -200,7 +222,7 @@ test('GET /api/invoices/:id for the caller client returns the invoice, its items
 
   const response = await call(app, 'GET', `/api/invoices/${invoice.id}`, 'a');
   assert.equal(response.status, 200);
-  const body = await response.json() as any;
+  const body = await json<InvoiceDetailBody>(response);
 
   assert.deepEqual(
     { id: body.id, number: body.number, status: body.status, totalCents: body.totalCents },
@@ -208,7 +230,7 @@ test('GET /api/invoices/:id for the caller client returns the invoice, its items
   );
   assert.equal(body.items.length, 2);
   assert.deepEqual(
-    body.items.map((item: { description: string; quantity: number; unitCents: number; amountCents: number }) => ({
+    body.items.map(item => ({
       description: item.description,
       quantity: item.quantity,
       unitCents: item.unitCents,
@@ -234,7 +256,7 @@ test('POST /api/invoices/:id/checkout on the caller client open invoice creates 
 
   const response = await call(app, 'POST', `/api/invoices/${invoice.id}/checkout`, 'a');
   assert.equal(response.status, 201);
-  const body = await response.json() as any;
+  const body = await json<CheckoutBody>(response);
   assert.equal(body.url, 'https://checkout.stripe.com/c/pay/cs_test_00000001');
 
   assert.equal(stripe.calls.length, 1);

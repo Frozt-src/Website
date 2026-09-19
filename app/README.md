@@ -80,9 +80,9 @@ production billing data.
 
 | Environment | D1 database | Secrets | Notes |
 |---|---|---|---|
-| `dev` (`--env dev`, the default for local work) | local D1 emulation (`.wrangler/state`); the config entry names `monolith-app-staging` but local emulation ignores the `database_id` | `app/.dev.vars` (test keys) | `npm run app:dev`, `npm run app:migrate:local`, `npm run app:seed` |
-| `staging` (`--env staging`) | `monolith-app-staging` (real remote D1) | `app/.dev.vars.staging` (test keys) | `npm run app:migrate:staging`; `npm run app:seed -- --staging --i-understand-remote-staging`; deploy is `npm run app:deploy:staging`, documented but never run in Phase 1 |
-| production (no `--env`, the top-level config) | `monolith-app-production` (`database_id` is a placeholder until the owner runs `wrangler d1 create`) | real keys, set only via `wrangler secret put` | never targeted by `app:seed`; no flag exists to seed production |
+| `dev` (`--env dev`, the default for local work) | local D1 emulation (`.wrangler/state`); the config entry names `monolith-app-staging` but local emulation ignores the `database_id` | `app/.dev.vars` (test keys), read only by `wrangler dev` | `npm run app:dev`, `npm run app:migrate:local`, `npm run app:seed` |
+| `staging` (`--env staging`) | `monolith-app-staging` (real remote D1) | locally: `app/.dev.vars.staging` (test keys), read only by `wrangler dev --env staging`. Once deployed, the Worker reads whatever was set with `wrangler secret put <NAME> --config app/wrangler.jsonc --env staging` — the file is never read at runtime | `npm run app:migrate:staging`; `npm run app:seed -- --staging --i-understand-remote-staging`; deploy is `npm run app:deploy:staging`, documented but never run in Phase 1 |
+| production (no `--env`, the top-level config) | `monolith-app-production` (`database_id` is a placeholder until the owner runs `wrangler d1 create`) | real keys, set only via `wrangler secret put <NAME> --config app/wrangler.jsonc` (no `--env`) | never targeted by `app:seed`; no flag exists to seed production |
 
 ## Environment and secrets
 
@@ -92,7 +92,10 @@ publishable key is served to the portal at `GET /api/public-config`.
 
 Secrets go in `app/.dev.vars` (git-ignored; copy from `.dev.vars.example`) for the `dev`
 environment, or `app/.dev.vars.staging` for the `staging` environment, **test-mode keys only,
-never live keys**:
+never live keys**. Both files are read only by `wrangler dev` (local emulation); a Worker actually
+deployed to staging or production never reads either file, only the secrets set on it with
+`wrangler secret put <NAME> --config app/wrangler.jsonc --env staging` (or no `--env` for
+production) — see "Environments" above:
 
 | Key | Purpose |
 |---|---|
@@ -179,6 +182,13 @@ that insert: the one that loses waits for the winner's url and returns it when b
 same channel, and reports `payment_in_progress` when they did not. A Stripe call that fails cancels
 the claim, so the next attempt can take it.
 
+**Accepted risk:** a request that crashes between inserting its claim and either finishing the
+Stripe call or reporting failure leaves that claim row behind with nothing to cancel it. It can
+outlive the crash for as long as `session_expires_at` allows — up to 30 minutes — during which
+every other attempt to pay the same invoice sees `payment_in_progress` instead of starting a new
+checkout. No process is watching for this today; the row simply ages out and the invoice becomes
+payable again once it expires.
+
 `canceled` is a legal source state for a settlement because a session this Worker replaced stays
 payable at Stripe for a short cushion; a payment Stripe actually charged is always recorded, with
 its payment intent. An invoice transition only fires when the payment row reached the matching
@@ -221,8 +231,10 @@ access the owner holds.
    `payment_events` and linked to the payment they belong to, so the refund and dispute history
    the design asks for is actually there.
 10. Before relying on any of the above, run a full test-mode Checkout end to end with
-    `stripe listen --forward-to localhost:8788/api/stripe/webhook` running locally first —
-    `app/tests/integration/README.md` is the runbook for exactly that.
+    `stripe listen --forward-to pay.localhost:8788/api/stripe/webhook` running locally first (the
+    Worker routes by exact hostname, so the webhook must be forwarded to the pay host, not
+    `localhost:8788` or `127.0.0.1:8788`) — `app/tests/integration/README.md` is the runbook for
+    exactly that.
 
 ## Privacy notice changes required before activation
 

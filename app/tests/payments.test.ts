@@ -362,6 +362,37 @@ test('a Stripe failure cancels the claim so the next checkout for the invoice su
   assert.equal(rows[0].id, retry.payment.id);
 });
 
+test('a claim cancelled between the Stripe call and its own update expires the orphaned session and reports payment_in_progress', async () => {
+  const { deps: baseDeps } = setup();
+  const { client, invoice: open } = await seedPayable(baseDeps);
+  const fake = new FakeStripe();
+  const stripe: StripeGateway = {
+    createCheckoutSession: async input => {
+      // Simulates something else (e.g. an expiry sweep) cancelling this request's own claim row
+      // between Stripe answering and the request's own UPDATE landing.
+      await baseDeps.db
+        .prepare(`UPDATE payments SET status = 'canceled', updated_at = ? WHERE invoice_id = ?`)
+        .bind(baseDeps.now(), open.id)
+        .run();
+      return fake.createCheckoutSession(input);
+    },
+    expireCheckoutSession: sessionId => fake.expireCheckoutSession(sessionId),
+  };
+  const deps = { ...baseDeps, stripe };
+
+  await assert.rejects(
+    () => startCheckout(deps.db, deps, { invoice: open, client, source: 'portal', successUrl, cancelUrl }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, 'payment_in_progress');
+      return true;
+    },
+  );
+
+  assert.equal(fake.calls.length, 1);
+  assert.deepEqual(fake.expired, ['cs_test_00000001']);
+  assert.equal((await openPayments(deps)).length, 0);
+});
+
 for (const status of ['processing', 'paid', 'void', 'draft'] as InvoiceStatus[]) {
   test(`startCheckout refuses an invoice with status ${status}`, async () => {
     const { deps, stripe } = setup();
@@ -629,6 +660,31 @@ test('an expired session cancels the payment and leaves the invoice alone', asyn
 
   assert.equal(result.outcome, 'applied');
   assert.equal((await payment(deps, created.id))?.status, 'canceled');
+  assert.equal((await invoice(deps, open.id))?.status, 'open');
+});
+
+test('a signed event whose session id equals an existing claim placeholder is unmatched and changes nothing', async () => {
+  const { deps } = setup();
+  const { invoice: open, payment: created } = await openCheckout(deps);
+  // Simulates a request still holding its claim row when an event happens to carry that literal
+  // placeholder as its session id: the webhook state machine must never match it to a real payment.
+  const claimSessionId = `claim:${created.id}`;
+  await deps.db.prepare(`UPDATE payments SET stripe_checkout_session_id = ? WHERE id = ?`).bind(claimSessionId, created.id).run();
+
+  const result = await applyStripeEvent(
+    deps.db,
+    deps,
+    checkoutEvent('checkout.session.completed', paidSession(created, { id: claimSessionId })),
+  );
+
+  assert.equal(result.outcome, 'unmatched');
+  const stored = await events(deps);
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].outcome, 'unmatched');
+  assert.equal(stored[0].payment_id, null);
+  const row = await payment(deps, created.id);
+  assert.equal(row?.status, 'pending');
+  assert.equal(row?.stripe_checkout_session_id, claimSessionId);
   assert.equal((await invoice(deps, open.id))?.status, 'open');
 });
 

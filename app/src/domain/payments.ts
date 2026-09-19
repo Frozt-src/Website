@@ -160,8 +160,9 @@ export async function startCheckout(
     client_id: input.invoice.clientId,
     payment_link_id: input.paymentLinkId ?? null,
     source: input.source,
-    // A placeholder until Stripe answers: the column is NOT NULL UNIQUE, and no Stripe session id
-    // can ever look like this, so the webhook state machine never matches an unfinished claim.
+    // A placeholder until Stripe answers: the column is NOT NULL UNIQUE, and applyStripeEvent below
+    // refuses to look up any event whose session id starts with `claim:`, so the webhook state
+    // machine never matches an unfinished claim even if an event happened to carry this literal id.
     stripe_checkout_session_id: `claim:${paymentId}`,
     stripe_payment_intent_id: null,
     checkout_url: null,
@@ -252,10 +253,22 @@ export async function startCheckout(
   }
 
   const row: PaymentRow = { ...claim, stripe_checkout_session_id: session.id, checkout_url: session.url };
-  await db
+  const update = await db
     .prepare(`UPDATE payments SET stripe_checkout_session_id = ?, checkout_url = ?, updated_at = ? WHERE id = ? AND status = 'pending'`)
     .bind(row.stripe_checkout_session_id, row.checkout_url, at, row.id)
     .run();
+  if (update.meta.changes !== 1) {
+    // The claim row changed under us (e.g. an expiry sweep cancelled it) between Stripe answering
+    // and this update, so the session Stripe just created has no payment row pointing back to it.
+    // Best effort: close it so it cannot be paid into an invoice that no longer claims it.
+    try {
+      await deps.stripe.expireCheckoutSession(session.id);
+    } catch (error) {
+      deps.logError('checkout_claim_lost_after_create', error);
+    }
+    deps.logError('checkout_claim_lost_after_create', new Error(`claim ${row.id} was lost after its Stripe session was created`));
+    throw paymentInProgress();
+  }
 
   return { url: session.url, payment: toPayment(row) };
 }
@@ -430,6 +443,11 @@ export async function applyStripeEvent(
   }
 
   const sessionId = typeof session.id === 'string' ? session.id : '';
+  // No real Stripe session id can ever look like this (see the claim placeholder above), so an event
+  // that carries one anyway is treated as unmatched before it is ever looked up against a payment row.
+  if (sessionId.startsWith('claim:')) {
+    return commit(db, event, [eventStatement('unmatched', null, null)], 'unmatched');
+  }
   const row = await db
     .prepare(`SELECT p.*, i.status AS invoice_status FROM payments p
       JOIN invoices i ON i.id = p.invoice_id WHERE p.stripe_checkout_session_id = ?`)

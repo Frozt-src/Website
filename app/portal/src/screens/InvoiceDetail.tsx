@@ -28,6 +28,37 @@ const methodLabel: Record<string, string> = {
 const POLL_INTERVAL_MS = 3000;
 const POLL_TIMEOUT_MS = 60000;
 
+// Matches the throttle window portal-api.ts falls back to (checkoutAttemptWindowSeconds) when a
+// too_many_attempts body somehow carries no retryAfterSeconds of its own.
+const DEFAULT_RETRY_AFTER_SECONDS = 600;
+
+function retryAfterMinutes(body: unknown): number {
+  const seconds =
+    typeof body === 'object' && body !== null && typeof (body as { retryAfterSeconds?: unknown }).retryAfterSeconds === 'number'
+      ? (body as { retryAfterSeconds: number }).retryAfterSeconds
+      : DEFAULT_RETRY_AFTER_SECONDS;
+  return Math.max(1, Math.round(seconds / 60));
+}
+
+// Branches on the error code the API attached, not just its HTTP status, since one status (409,
+// 503) covers more than one code with different copy.
+function payErrorMessage(err: unknown): string {
+  if (!(err instanceof ApiError)) return 'We could not start checkout. Please try again.';
+  switch (err.code) {
+    case 'payment_in_progress':
+      return 'A payment for this invoice is already in progress. Please check back shortly.';
+    case 'invoice_not_payable':
+      return 'This invoice can no longer be paid.';
+    case 'too_many_attempts':
+      return `Too many payment attempts. Please wait about ${retryAfterMinutes(err.body)} minutes and try again.`;
+    case 'payments_not_configured':
+    case 'payments_unavailable':
+      return 'Payments are not available right now.';
+    default:
+      return 'We could not start checkout. Please try again.';
+  }
+}
+
 // Mirrors completePage's three-way wording (app/src/pay/render.ts) so the pay host and the portal
 // describe the same moment the same way.
 function checkoutMessage(checkoutParam: string | null, status: InvoiceStatus): string | null {
@@ -119,9 +150,7 @@ export default function InvoiceDetail({ id }: { id: string }) {
       window.location.href = url;
     } catch (err) {
       setPaying(false);
-      if (err instanceof ApiError && err.status === 409) setPayError('This invoice can no longer be paid.');
-      else if (err instanceof ApiError && err.status === 503) setPayError('Payments are not available right now.');
-      else setPayError('We could not start checkout. Please try again.');
+      setPayError(payErrorMessage(err));
     }
   };
 

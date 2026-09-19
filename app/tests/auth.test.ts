@@ -5,10 +5,20 @@ import { authorizedParties } from '../src/index.ts';
 import { resolveMembership } from '../src/auth/membership.ts';
 import { newId } from '../src/domain/ids.ts';
 import { outstandingBalanceCents } from '../src/domain/invoices.ts';
-import { testDeps, portalUrl, FakeSessions, FakeClerkUsers } from './helpers/app.ts';
+import { testDeps, portalUrl, FakeSessions, FakeClerkUsers, json } from './helpers/app.ts';
 import { seedClient, seedInvoice } from './helpers/fixtures.ts';
 import type { AppDeps } from '../src/deps.ts';
 import type { Client } from '../src/domain/models.ts';
+
+interface MeBody {
+  user: { id: string };
+  client: { id: string; name: string };
+  membership: { id: string; role: string; status: string };
+  balanceCents: number;
+}
+interface ServicesBody {
+  services: { name: string; status: string }[];
+}
 
 function setup() {
   const sessions = new FakeSessions();
@@ -112,7 +122,7 @@ test('first login binds the invited membership and audits it', async () => {
 
   const response = await get(app, '/api/me', 'token');
   assert.equal(response.status, 200);
-  const body = await response.json() as any;
+  const body = await json<MeBody>(response);
   assert.equal(body.user.id, 'user_1');
   assert.equal(body.client.id, client.id);
   assert.equal(body.client.name, 'Alex Industries');
@@ -161,7 +171,7 @@ test('membership binding matches the email case-insensitively', async () => {
 
   const response = await get(app, '/api/me', 'token');
   assert.equal(response.status, 200);
-  assert.equal((await response.json() as any).membership.id, membershipId);
+  assert.equal((await json<MeBody>(response)).membership.id, membershipId);
 });
 
 test('concurrent first logins both resolve the one invited membership', async () => {
@@ -239,7 +249,7 @@ test('balanceCents in /api/me is the outstanding balance', async () => {
 
   const response = await get(app, '/api/me', 'token');
   assert.equal(response.status, 200);
-  const body = await response.json() as any;
+  const body = await json<MeBody>(response);
   assert.equal(body.balanceCents, 15000);
   assert.equal(body.balanceCents, await outstandingBalanceCents(deps.db, client.id));
 });
@@ -274,8 +284,8 @@ test('services list only the services of the caller client', async () => {
 
   const response = await get(app, '/api/services', 'token');
   assert.equal(response.status, 200);
-  const body = await response.json() as any;
-  assert.deepEqual(body.services.map((service: { name: string }) => service.name), ['Managed backups']);
+  const body = await json<ServicesBody>(response);
+  assert.deepEqual(body.services.map(service => service.name), ['Managed backups']);
   assert.equal(body.services[0].status, 'active');
 });
 

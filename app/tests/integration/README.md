@@ -32,7 +32,11 @@ $ npm run app:test:integration
 One precondition **cannot** be checked from here: `stripe listen` has to be forwarding webhooks to
 the local Worker. Nothing tells the test whether it is running, so a step that depends on a webhook
 waits and then fails with a message naming `stripe listen --forward-to
-127.0.0.1:8788/api/stripe/webhook`.
+pay.localhost:8788/api/stripe/webhook`.
+
+`pay.localhost` must resolve to `127.0.0.1` for the Stripe CLI. Chrome resolves `*.localhost` on
+its own, but the Stripe CLI does not always; if `ping pay.localhost` fails, add `127.0.0.1
+pay.localhost` to `C:\Windows\System32\drivers\etc\hosts` (Windows).
 
 ## Runbook
 
@@ -61,8 +65,13 @@ In a second terminal:
 
 ```sh
 stripe login
-stripe listen --forward-to 127.0.0.1:8788/api/stripe/webhook
+stripe listen --forward-to pay.localhost:8788/api/stripe/webhook
 ```
+
+The Worker routes by exact hostname, so the webhook must be forwarded to the pay host
+(`pay.localhost:8788`), not `127.0.0.1:8788` or plain `localhost:8788` — either of those gets a
+`404` from the Worker instead of reaching the webhook route. `pay.localhost` must resolve to
+`127.0.0.1` for the Stripe CLI (see the note above).
 
 `stripe listen` prints a `whsec_…` signing secret **of its own** — it is not the dashboard endpoint
 secret. Copy it into `STRIPE_WEBHOOK_SECRET` in `app/.dev.vars` and **restart `npm run app:dev`**,
@@ -73,6 +82,13 @@ because wrangler reads `.dev.vars` at start-up. Leave `stripe listen` running.
 ```sh
 MONOLITH_INTEGRATION_MANUAL=1 npm run app:test:integration # full run — use this for live validation
 npm run app:test:integration                               # automated steps only, finishes in seconds
+```
+
+In PowerShell, set the environment variable in its own statement first:
+
+```powershell
+$env:MONOLITH_INTEGRATION_MANUAL='1'; npm run app:test:integration # full run — use this for live validation
+npm run app:test:integration                                       # automated steps only, finishes in seconds
 ```
 
 **Live validation uses the first line.** Without `MONOLITH_INTEGRATION_MANUAL=1` every step that
@@ -129,7 +145,7 @@ run — read the reason. Useful ones:
   card step first` — the replay step has nothing to replay because no card payment has been
   completed on this database.
 - `timed out after 600s waiting for … (is \`stripe listen --forward-to
-  127.0.0.1:8788/api/stripe/webhook\` running?)` — the hosted page was completed but no webhook
+  pay.localhost:8788/api/stripe/webhook\` running?)` — the hosted page was completed but no webhook
   arrived, or the `whsec_` in `.dev.vars` is not the one `stripe listen` printed.
 
 ### 7. Cleaning up

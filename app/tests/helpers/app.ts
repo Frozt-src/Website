@@ -17,6 +17,12 @@ export function portalUrl(path: string): string {
   return `https://portal.test${path}`;
 }
 
+// A typed stand-in for `await res.json() as any`: the cast still happens (a Response's body is
+// unknown until parsed), but callers name the shape they expect instead of scattering `any`.
+export async function json<T = Record<string, unknown>>(res: Response): Promise<T> {
+  return (await res.json()) as T;
+}
+
 export class FakeSessions implements SessionVerifier {
   private users = new Map<string, string>();
   set(token: string, userId: string): void {
