@@ -10,7 +10,7 @@ checklist below.
 
 | Domain | Store | Owner of truth |
 |---|---|---|
-| PSA data (tickets, companies, contacts, agreements) | ConnectWise Manage | outside this repo; not integrated |
+| PSA data (tickets, companies, contacts, agreements) | external PSA system used by the MONOLITH internal app | outside this repo; not integrated |
 | Public website inquiries | D1 `monolith-inquiries` (Worker `monolith-api`) | existing, untouched by this app |
 | Portal, invoices, payments, memberships | D1 `monolith-app` (this Worker) | authoritative for the billing domain |
 

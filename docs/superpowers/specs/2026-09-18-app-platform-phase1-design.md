@@ -10,7 +10,7 @@ A production-shaped foundation for client billing: an opaque-link payment page (
 
 | Domain | Store | Owner of truth |
 |---|---|---|
-| PSA data (tickets, companies, contacts, agreements) | ConnectWise Manage, via the MONOLITH internal app | ConnectWise. **Out of scope. Nothing in this repo touches, references, or imports anything ConnectWise.** |
+| PSA data (tickets, companies, contacts, agreements) | external PSA system used by the MONOLITH internal app | External PSA vendor. **Out of scope. Nothing in this repo touches, references, or imports the external PSA vendor.** |
 | Public website inquiries | D1 `monolith-inquiries` (Worker `monolith-api`) | Existing. Untouched. |
 | Portal, invoices, payments, memberships | **New** D1 `monolith-app` (new Worker `monolith-app`) | Authoritative for the billing domain. |
 
@@ -71,4 +71,4 @@ Offline-verifiable with fakes for Clerk (session verifier, user lookup) and Stri
 
 ## Out of scope for Phase 1
 
-ConnectWise anything; admin/staff API implementation; DNS, Custom Domains, remote D1 creation, Workers Paid, live Stripe, Clerk production instance (all owner approvals); partial payments/refunds; Turnstile (token entropy makes brute force infeasible; add only on observed abuse); email notifications; privacy-policy text changes (required changes are listed in `app/README.md` for the owner).
+No external PSA/CRM vendor integration is in scope; admin/staff API implementation; DNS, Custom Domains, remote D1 creation, Workers Paid, live Stripe, Clerk production instance (all owner approvals); partial payments/refunds; Turnstile (token entropy makes brute force infeasible; add only on observed abuse); email notifications; privacy-policy text changes (required changes are listed in `app/README.md` for the owner).
