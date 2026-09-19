@@ -45,7 +45,10 @@ npm run app:dev             # wrangler dev on http://127.0.0.1:8788
 
 Then open the pay URL `app:seed` printed (e.g. `http://pay.localhost:8788/i/<token>`) and
 `http://localhost:8788/` for the portal. `app:migrate:local` and `app:seed` only ever touch the
-local D1 under `app/.wrangler/state`; neither takes a `--remote` flag.
+local D1 under `app/.wrangler/state`; neither takes a `--remote` flag. `app:seed` also takes
+`--json` (the seeded ids, tokens and pay URLs as one JSON object on stdout instead of the summary)
+and `--extra-invoice` (repeat it once per additional open invoice, each with its own payment link),
+both used by the integration harness below.
 
 Without `STRIPE_SECRET_KEY` set, everything except paying still works — clicking "Pay invoice"
 renders a 503 "payments are not available right now" page instead of creating a Checkout Session.
@@ -62,6 +65,13 @@ out of `npm run app:build`'s production output.
 `npm test` (from the repo root) runs `app/tests/*.test.ts` with `node --test`, using real SQLite
 (`node:sqlite`) against the real migration files, with Clerk and Stripe replaced by fakes injected
 through `createApp(deps: AppDeps)`. No network access, no real credentials.
+
+`npm run app:test:integration` runs the separate, gated harness in `app/tests/integration/`, which
+does the opposite: a real Clerk development instance and real Stripe test mode against a Worker
+running locally, including the manual card, ACH and sign-in-ticket steps. It is not part of
+`npm test`. Without test-mode keys in `app/.dev.vars`, or with no Worker on `127.0.0.1:8788`, every
+step skips with the reason printed and the run exits 0. The runbook, the manual steps and the
+sources for every Stripe/Clerk test value it uses are in `app/tests/integration/README.md`.
 
 ## Environments
 
@@ -211,7 +221,8 @@ access the owner holds.
    `payment_events` and linked to the payment they belong to, so the refund and dispute history
    the design asks for is actually there.
 10. Before relying on any of the above, run a full test-mode Checkout end to end with
-    `stripe listen --forward-to localhost:8788/api/stripe/webhook` running locally first.
+    `stripe listen --forward-to localhost:8788/api/stripe/webhook` running locally first —
+    `app/tests/integration/README.md` is the runbook for exactly that.
 
 ## Privacy notice changes required before activation
 

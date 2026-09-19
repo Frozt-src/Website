@@ -23,6 +23,7 @@
     "app:migrate:local": "wrangler d1 migrations apply monolith-app-staging --local --config app/wrangler.jsonc --env dev",
     "app:migrate:staging": "wrangler d1 migrations apply monolith-app-staging --remote --config app/wrangler.jsonc --env staging",
     "app:seed": "node app/scripts/seed-dev.mjs",
+    "app:test:integration": "node --test --test-concurrency=1 app/tests/integration/*.integration.test.ts",
     "app:build": "vite build --config app/portal/vite.config.ts",
     "app:portal:dev": "vite --config app/portal/vite.config.ts --host 127.0.0.1",
     "app:portal:preview": "vite --config app/portal/vite.config.ts --host 127.0.0.1 --mode preview",

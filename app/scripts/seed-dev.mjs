@@ -3,8 +3,11 @@
 // the local D1 database (`app/.wrangler/state`). With --staging --i-understand-remote-staging it
 // targets the remote staging D1 (`monolith-app-staging`) instead; there is no flag to target
 // production. Node built-ins only, no dependencies.
-// Usage: node app/scripts/seed-dev.mjs [--email <address>] [--reset]
+// Usage: node app/scripts/seed-dev.mjs [--email <address>] [--reset] [--json] [--extra-invoice ...]
 //        node app/scripts/seed-dev.mjs --staging --i-understand-remote-staging [--email <address>] [--reset]
+// --json prints the seeded ids and tokens as one JSON object instead of the human summary, and
+// --extra-invoice (repeat it once per invoice) adds a further open invoice with its own link, so
+// the integration harness can use a fresh invoice per scenario.
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { execSync } from 'node:child_process';
@@ -22,6 +25,8 @@ function parseArgs(argv) {
   let reset = false;
   let staging = false;
   let iUnderstandRemoteStaging = false;
+  let json = false;
+  let extraInvoices = 0;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--email') {
@@ -33,6 +38,10 @@ function parseArgs(argv) {
       staging = true;
     } else if (arg === '--i-understand-remote-staging') {
       iUnderstandRemoteStaging = true;
+    } else if (arg === '--json') {
+      json = true;
+    } else if (arg === '--extra-invoice') {
+      extraInvoices++;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
@@ -42,7 +51,7 @@ function parseArgs(argv) {
       '--staging writes to the remote staging D1 database; pass --i-understand-remote-staging to confirm.',
     );
   }
-  return { email, reset, staging };
+  return { email, reset, staging, json, extraInvoices };
 }
 
 // execSync always runs through a shell, so array args are not auto-quoted for us; only the pieces
@@ -82,7 +91,7 @@ function insertService({ id, clientId, name, description, startedAt }) {
     VALUES (${sqlString(id)}, ${sqlString(clientId)}, ${sqlString(name)}, ${sqlString(description)}, 'active', ${startedAt}, ${now}, ${now});`;
 }
 
-const { email, reset, staging } = parseArgs(process.argv.slice(2));
+const { email, reset, staging, json, extraInvoices } = parseArgs(process.argv.slice(2));
 const databaseName = 'monolith-app-staging';
 const envName = staging ? 'staging' : 'dev';
 const resourceFlag = staging ? '--remote' : '--local';
@@ -191,13 +200,41 @@ statements.push(
   insertInvoiceItem({ id: randomUUID(), invoiceId: invoiceDraftId, position: 1, description: 'Additional services', quantity: 1, unitCents: 9500 }),
 );
 
-const token = randomBytes(32).toString('base64url');
-const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex');
-const paymentLinkId = randomUUID();
-statements.push(
-  `INSERT INTO payment_links (id, invoice_id, token_hash, status, created_at)
-    VALUES (${sqlString(paymentLinkId)}, ${sqlString(invoiceOpenId)}, ${sqlString(tokenHash)}, 'active', ${now});`,
-);
+// The plaintext token is returned to the caller and never stored; only its SHA-256 digest goes in.
+function issuePaymentLink(invoiceId) {
+  const linkToken = randomBytes(32).toString('base64url');
+  const tokenHash = createHash('sha256').update(linkToken, 'utf8').digest('hex');
+  statements.push(
+    `INSERT INTO payment_links (id, invoice_id, token_hash, status, created_at)
+      VALUES (${sqlString(randomUUID())}, ${sqlString(invoiceId)}, ${sqlString(tokenHash)}, 'active', ${now});`,
+  );
+  return linkToken;
+}
+
+const token = issuePaymentLink(invoiceOpenId);
+
+// One further open invoice per --extra-invoice, each with its own link, so a test that consumes an
+// invoice (pays it, revokes its link, voids it) does not have to share one with the next test.
+const extras = [];
+for (let index = 0; index < extraInvoices; index++) {
+  const id = randomUUID();
+  const number = `MON-${String(4 + index).padStart(5, '0')}`;
+  const totalCents = 12500;
+  statements.push(
+    insertInvoice({
+      id,
+      clientId,
+      number,
+      status: 'open',
+      totalCents,
+      description: 'Integration Test Invoice',
+      issuedAt: now - day,
+      dueAt: now + 29 * day,
+    }),
+    insertInvoiceItem({ id: randomUUID(), invoiceId: id, position: 1, description: 'Integration test line', quantity: 1, unitCents: totalCents }),
+  );
+  extras.push({ id, number, totalCents, token: issuePaymentLink(id) });
+}
 
 const tempDir = mkdtempSync(join(tmpdir(), 'monolith-seed-'));
 const sqlPath = join(tempDir, 'seed.sql');
@@ -208,10 +245,39 @@ try {
   rmSync(tempDir, { recursive: true, force: true });
 }
 
-console.log(`Seeded "${clientName}" with invoices MON-00001 (open), MON-00002 (paid), MON-00003 (draft).`);
-console.log(`Invited email: ${email}`);
-if (staging) {
-  console.log(`Seeded into remote staging D1 (${databaseName}). Token: ${token}`);
+// Staging is reached over its own hostname, so only a local seed can name a working pay URL.
+function payUrl(linkToken) {
+  return staging ? null : `http://pay.localhost:8788/i/${linkToken}`;
+}
+
+function invoiceJson(id, number, totalCents, linkToken) {
+  return { id, number, totalCents, token: linkToken, payUrl: linkToken === null ? null : payUrl(linkToken) };
+}
+
+if (json) {
+  // The only thing on stdout, so the integration harness can parse it.
+  console.log(
+    JSON.stringify({
+      clientId,
+      email,
+      membershipId,
+      invoices: {
+        open: invoiceJson(invoiceOpenId, 'MON-00001', 42500, token),
+        paid: invoiceJson(invoicePaidId, 'MON-00002', 15000, null),
+        draft: invoiceJson(invoiceDraftId, 'MON-00003', 9500, null),
+      },
+      extraInvoices: extras.map(extra => invoiceJson(extra.id, extra.number, extra.totalCents, extra.token)),
+    }),
+  );
 } else {
-  console.log(`Pay URL: http://pay.localhost:8788/i/${token}`);
+  console.log(`Seeded "${clientName}" with invoices MON-00001 (open), MON-00002 (paid), MON-00003 (draft).`);
+  console.log(`Invited email: ${email}`);
+  if (staging) {
+    console.log(`Seeded into remote staging D1 (${databaseName}). Token: ${token}`);
+  } else {
+    console.log(`Pay URL: http://pay.localhost:8788/i/${token}`);
+  }
+  for (const extra of extras) {
+    console.log(staging ? `${extra.number} (open). Token: ${extra.token}` : `${extra.number} (open) pay URL: ${payUrl(extra.token)}`);
+  }
 }
