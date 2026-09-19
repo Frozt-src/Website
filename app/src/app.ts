@@ -34,8 +34,14 @@ function createPayApp(deps: AppDeps) {
   app.route('/', createPayRoutes(deps));
   // Every other path on this host (including the retired token-bearing return routes) gets the same
   // branded HTML 404 the invoice routes render, never a bare JSON error. The webhook keeps its own
-  // JSON responses; it is a real, matched route above, so this never applies to it.
-  app.notFound(c => c.body(notFoundPage(), 404, { 'Content-Type': 'text/html; charset=utf-8' }));
+  // JSON responses; it is a real, matched route above, so this never applies to it. A path under
+  // /i/ or /checkout/ still gets the payment-link copy; anything else (e.g. /robots.txt) gets the
+  // generic variant, since no link was necessarily involved.
+  app.notFound(c => {
+    const path = c.req.path;
+    const generic = !path.startsWith('/i/') && !path.startsWith('/checkout/');
+    return c.body(notFoundPage(generic ? 'generic' : 'invoice-link'), 404, { 'Content-Type': 'text/html; charset=utf-8' });
+  });
   return app;
 }
 

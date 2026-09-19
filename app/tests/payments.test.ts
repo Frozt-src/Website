@@ -206,6 +206,27 @@ test('a checkout from the other source throws payment_in_progress when Stripe ca
   assert.equal(rows.results[0].source, 'payment_link');
 });
 
+test('a payment_in_progress failure logs checkout_expire_failed before throwing', async () => {
+  const { deps: baseDeps, stripe } = setup();
+  const logged: { event: string; error: unknown }[] = [];
+  const deps = { ...baseDeps, logError: (event: string, error: unknown) => logged.push({ event, error }) };
+  const { client, invoice: open } = await seedPayable(deps);
+  await startCheckout(deps.db, deps, { invoice: open, client, source: 'payment_link', successUrl, cancelUrl });
+  stripe.expireShouldThrow = true;
+
+  await assert.rejects(
+    () => startCheckout(deps.db, deps, { invoice: open, client, source: 'portal', successUrl, cancelUrl }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, 'payment_in_progress');
+      return true;
+    },
+  );
+
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0].event, 'checkout_expire_failed');
+  assert.ok(logged[0].error instanceof Error);
+});
+
 test('startCheckout opens a new session and cancels the old payment once the session expired', async () => {
   const { deps, stripe, advance } = setup();
   const { client, invoice: open } = await seedPayable(deps);

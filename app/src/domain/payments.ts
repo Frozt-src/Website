@@ -83,7 +83,7 @@ export interface StartCheckoutInput {
 
 export async function startCheckout(
   db: D1Database,
-  deps: { now(): number; stripe: StripeGateway },
+  deps: { now(): number; stripe: StripeGateway; logError(event: string, error: unknown): void },
   input: StartCheckoutInput,
 ): Promise<{ url: string; payment: Payment }> {
   if (input.invoice.status !== 'open') throw invoiceNotPayable();
@@ -103,7 +103,8 @@ export async function startCheckout(
     // genuinely in flight: report that instead of opening a second live session for the same invoice.
     try {
       await deps.stripe.expireCheckoutSession(pending.stripe_checkout_session_id);
-    } catch {
+    } catch (error) {
+      deps.logError('checkout_expire_failed', error);
       throw paymentInProgress();
     }
   }

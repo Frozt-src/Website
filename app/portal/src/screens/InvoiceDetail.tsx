@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApi } from '../auth';
 import { ApiError, formatDate, formatMoney } from '../api';
 import type { InvoiceDetail as InvoiceDetailData, InvoiceStatus, PaymentStatus } from '../api';
@@ -71,15 +71,30 @@ export default function InvoiceDetail({ id }: { id: string }) {
     load();
   }, [load]);
 
-  // The webhook that flips the invoice to processing/paid can land seconds after Stripe redirects
-  // the payer back, so while it's still open here, poll for up to 60s. Stops on its own once the
-  // status changes (the dependency below no longer reads 'open') or the component unmounts.
+  // Whether we're waiting on the webhook to flip this invoice off 'open'. A plain boolean (not the
+  // invoice object) so the polling effect below doesn't see a new dependency value on every poll.
+  const confirming = checkoutParam === 'complete' && invoice?.status === 'open';
+
+  // The poll loop reads the latest status through a ref instead of `invoice` directly, so a
+  // successful poll (which calls setInvoice) doesn't change the effect's own dependencies.
+  const statusRef = useRef(invoice?.status);
   useEffect(() => {
-    if (checkoutParam !== 'complete' || !invoice || invoice.status !== 'open') return;
+    statusRef.current = invoice?.status;
+  }, [invoice?.status]);
+
+  // The webhook that flips the invoice to processing/paid can land seconds after Stripe redirects
+  // the payer back, so while it's still open here, poll for up to 60s. The deadline lives in a ref
+  // set once when polling starts: depending on `confirming`/`id` rather than `invoice` keeps each
+  // successful poll from recreating the interval and pushing the 60s deadline back out. Stops on
+  // its own once the status changes, the deadline passes, or the component unmounts.
+  const deadlineRef = useRef(0);
+  useEffect(() => {
+    if (!confirming) return;
+    deadlineRef.current = Date.now() + POLL_TIMEOUT_MS;
     let cancelled = false;
-    const start = Date.now();
     const timer = setInterval(() => {
-      if (Date.now() - start >= POLL_TIMEOUT_MS) {
+      if (cancelled) return;
+      if (Date.now() >= deadlineRef.current || statusRef.current !== 'open') {
         clearInterval(timer);
         return;
       }
@@ -94,7 +109,7 @@ export default function InvoiceDetail({ id }: { id: string }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [checkoutParam, invoice, api, id]);
+  }, [confirming, id, api]);
 
   const pay = async () => {
     setPaying(true);
@@ -118,8 +133,9 @@ export default function InvoiceDetail({ id }: { id: string }) {
 
   if (error) {
     return (
-      <section className="portal-section">
+      <section className="portal-section" aria-labelledby="invoice-title">
         {backLink}
+        <h1 id="invoice-title">Invoice</h1>
         <p className="portal-error" role="alert">
           {error}
         </p>
@@ -128,8 +144,9 @@ export default function InvoiceDetail({ id }: { id: string }) {
   }
   if (!invoice) {
     return (
-      <section className="portal-section">
+      <section className="portal-section" aria-labelledby="invoice-title">
         {backLink}
+        <h1 id="invoice-title">Invoice</h1>
         <p className="portal-meta" role="status">
           Loading…
         </p>

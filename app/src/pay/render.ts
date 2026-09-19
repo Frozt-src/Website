@@ -185,18 +185,24 @@ export interface CancelPageInput {
 export function cancelPage(input: CancelPageInput): string {
   const body = `${wordmark()}
 <main>
-<h1>Checkout canceled</h1>
+<h1>Checkout cancelled</h1>
 <p>Your payment was cancelled. Use the link from your invoice email to try again.</p>
 </main>
 ${footer(input.year)}`;
-  return layout({ title: 'Checkout canceled', body });
+  return layout({ title: 'Checkout cancelled', body });
 }
 
-export function notFoundPage(): string {
+// 'invoice-link' (the default) covers the /i/* and /checkout/* routes, where the visitor almost
+// always arrived via a stale or tampered payment link. Every other unmatched path on this host
+// (e.g. /robots.txt) gets the generic variant instead, which doesn't imply a link was involved.
+export type NotFoundKind = 'invoice-link' | 'generic';
+
+export function notFoundPage(kind: NotFoundKind = 'invoice-link'): string {
+  const message = kind === 'generic' ? 'That page doesn’t exist.' : 'This payment link is no longer valid.';
   const body = `${wordmark()}
 <main>
 <h1>Page not found</h1>
-<p>This payment link is no longer valid.</p>
+<p>${message}</p>
 <p>Questions? Email <a href="mailto:eldritch@mnlith.dev">eldritch@mnlith.dev</a>.</p>
 </main>`;
   return layout({ title: 'Page not found', body });

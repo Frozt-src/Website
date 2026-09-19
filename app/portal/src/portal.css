@@ -60,6 +60,7 @@ p { margin: 0 0 12px; }
 .portal-wordmark { font-family: var(--display); font-weight: 500; font-size: 15px; letter-spacing: .2em; }
 .portal-tag { font-size: 12px; color: var(--muted); }
 .portal-nav { display: flex; gap: 24px; font-size: 14px; }
+.portal-nav a { display: inline-flex; align-items: center; min-height: 44px; padding-inline: 8px; }
 
 .portal-main { width: min(760px, calc(100% - 48px)); margin-inline: auto; padding-block: 40px 64px; }
 .portal-main.portal-signin,

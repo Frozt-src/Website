@@ -380,6 +380,19 @@ test('the cancel page points the payer back at their invoice email and carries n
   assert.ok(!body.includes(token));
 });
 
+test('the cancel page spells "cancelled" with two Ls in the title and heading, matching its own body copy', async () => {
+  const deps = testDeps();
+  const app = createApp(deps);
+  const { sessionId } = await startLinkCheckout(deps);
+
+  const response = await app.fetch(new Request(payUrl(`/checkout/cancel?session_id=${sessionId}`)));
+  const body = await response.text();
+
+  assert.match(body, /<title>Checkout cancelled<\/title>/);
+  assert.match(body, /<h1>Checkout cancelled<\/h1>/);
+  assert.ok(!body.includes('Checkout canceled'));
+});
+
 for (const [name, query] of [
   ['malformed', '?session_id=not-a-session'],
   ['too short', '?session_id=cs_test_abc'],
@@ -443,6 +456,20 @@ test('any unknown pay-host path renders the branded 404 page, not JSON', async (
   const body = await response.text();
   assert.match(body, /<header class="wordmark">MONOLITH<\/header>/);
   assert.match(body, /Page not found/);
+});
+
+test('a path outside /i/ and /checkout/ renders the generic not-found variant, not the invoice-link copy', async () => {
+  const deps = testDeps();
+  const app = createApp(deps);
+
+  const response = await app.fetch(new Request(payUrl('/robots.txt')));
+  const body = await response.text();
+
+  assert.equal(response.status, 404);
+  assert.equal(response.headers.get('Content-Type'), 'text/html; charset=utf-8');
+  assert.match(body, /Page not found/);
+  assert.match(body, /That page doesn.t exist\./);
+  assert.ok(!body.includes('This payment link is no longer valid.'));
 });
 
 test('the stylesheet is served as css with a long cache lifetime', async () => {
