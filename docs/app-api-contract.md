@@ -137,7 +137,7 @@ throttle" below). Only this route counts; every `GET` route is unthrottled.
 
 Both hosts. `{ "status": "ok" }`, no auth.
 
-## Pay host routes (`pay.mnlith.dev`, `pay.localhost` in dev)
+## Pay host routes (`pay.mnlith.dev`; `127.0.0.1` in development)
 
 Server-rendered HTML, no client-side JavaScript, no Clerk. The `/i/:token` routes resolve the
 invoice by the payment-link token's SHA-256 hash; a malformed, unknown, revoked, `draft`-invoice or
