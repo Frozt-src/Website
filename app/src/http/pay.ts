@@ -4,6 +4,7 @@ import type { Context } from 'hono';
 import type { AppDeps } from '../deps.ts';
 import { resolvePaymentLink } from '../domain/payment-links.ts';
 import { invoiceForPaymentLinkSession, startCheckout } from '../domain/payments.ts';
+import { allowCheckoutAttempt, checkoutAttemptWindowSeconds } from '../domain/throttle.ts';
 import { listInvoiceItems } from '../domain/invoices.ts';
 import {
   cancelPage,
@@ -14,6 +15,7 @@ import {
   paidPage,
   paymentInProgressPage,
   processingPage,
+  tooManyAttemptsPage,
   unavailablePage,
 } from '../pay/render.ts';
 import { payCss } from '../pay/styles.ts';
@@ -26,8 +28,8 @@ function hasErrorCode(error: unknown, code: string): boolean {
   return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === code;
 }
 
-function html(c: Context, body: string, status: 200 | 404 | 409 | 503): Response {
-  return c.body(body, status, { 'Content-Type': 'text/html; charset=utf-8' });
+function html(c: Context, body: string, status: 200 | 404 | 409 | 429 | 503, headers: Record<string, string> = {}): Response {
+  return c.body(body, status, { 'Content-Type': 'text/html; charset=utf-8', ...headers });
 }
 
 export function createPayRoutes(deps: AppDeps) {
@@ -53,6 +55,14 @@ export function createPayRoutes(deps: AppDeps) {
     if (!resolved) return html(c, notFoundPage(), 404);
 
     const { invoice, client, link } = resolved;
+
+    // Only POST checkout attempts count, keyed per payment link; page views (GET /i/:token) never
+    // touch this. No CAPTCHA — see app/README.md.
+    const allowed = await allowCheckoutAttempt(deps.db, deps.now(), `link:${link.id}`);
+    if (!allowed) {
+      return html(c, tooManyAttemptsPage(), 429, { 'Retry-After': String(checkoutAttemptWindowSeconds) });
+    }
+
     // The origin the payer actually reached us on, so the dev port survives the Stripe round trip.
     const base = new URL(c.req.url).origin;
     try {

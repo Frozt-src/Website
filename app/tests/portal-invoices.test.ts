@@ -341,6 +341,56 @@ test('POST /api/invoices/:id/checkout answers 503 when the Stripe call itself fa
   assert.deepEqual(logged, ['checkout_create_failed']);
 });
 
+test('an 11th checkout POST for the same member is throttled with 429 too_many_attempts', async () => {
+  const { deps, sessions, app } = setup();
+  const a = await seedBoundAccount(deps, sessions, { token: 'a', userId: 'user_a', name: 'Client A' });
+  const invoice = await seedInvoice(deps.db, deps.now, a.id);
+
+  for (let i = 0; i < 10; i++) {
+    const response = await call(app, 'POST', `/api/invoices/${invoice.id}/checkout`, 'a');
+    assert.equal(response.status, 201);
+  }
+
+  const eleventh = await call(app, 'POST', `/api/invoices/${invoice.id}/checkout`, 'a');
+  assert.equal(eleventh.status, 429);
+  assert.deepEqual(await eleventh.json(), { error: 'too_many_attempts', retryAfterSeconds: 600 });
+  assert.equal(eleventh.headers.get('Retry-After'), '600');
+});
+
+test('checkout access for a member is restored once the throttle window expires', async () => {
+  const { deps, sessions, app, advance } = setup();
+  const a = await seedBoundAccount(deps, sessions, { token: 'a', userId: 'user_a', name: 'Client A' });
+  const invoice = await seedInvoice(deps.db, deps.now, a.id);
+
+  for (let i = 0; i < 10; i++) {
+    await call(app, 'POST', `/api/invoices/${invoice.id}/checkout`, 'a');
+  }
+  const blocked = await call(app, 'POST', `/api/invoices/${invoice.id}/checkout`, 'a');
+  assert.equal(blocked.status, 429);
+
+  advance(601);
+
+  const restored = await call(app, 'POST', `/api/invoices/${invoice.id}/checkout`, 'a');
+  assert.equal(restored.status, 201);
+});
+
+test('checkout throttle counters are per member; another member is unaffected', async () => {
+  const { deps, sessions, app } = setup();
+  const a = await seedBoundAccount(deps, sessions, { token: 'a', userId: 'user_a', name: 'Client A' });
+  const invoiceA = await seedInvoice(deps.db, deps.now, a.id);
+  const b = await seedBoundAccount(deps, sessions, { token: 'b', userId: 'user_b', name: 'Client B' });
+  const invoiceB = await seedInvoice(deps.db, deps.now, b.id);
+
+  for (let i = 0; i < 10; i++) {
+    await call(app, 'POST', `/api/invoices/${invoiceA.id}/checkout`, 'a');
+  }
+  const blockedA = await call(app, 'POST', `/api/invoices/${invoiceA.id}/checkout`, 'a');
+  assert.equal(blockedA.status, 429);
+
+  const responseB = await call(app, 'POST', `/api/invoices/${invoiceB.id}/checkout`, 'b');
+  assert.equal(responseB.status, 201);
+});
+
 test('POST /api/invoices/:id/checkout without Stripe configured is unavailable', async () => {
   const stripe: StripeGateway = {
     createCheckoutSession: async () => {

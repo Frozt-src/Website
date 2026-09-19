@@ -106,6 +106,16 @@ never live keys**:
   revokes the old one in the same batch. Malformed, unknown, revoked, draft-invoice or
   void-invoice tokens all render the same generic 404; a paid invoice renders a distinct "already
   paid" page (number, amount, paid date) with no payment action.
+- **Checkout abuse throttle, deliberately no CAPTCHA**: `POST /i/:token/checkout` (pay host) and
+  `POST /api/invoices/:id/checkout` (portal) are limited to 10 attempts per rolling 10-minute
+  window — per payment link and per member respectively — by one atomic D1 UPSERT
+  (`app/src/domain/throttle.ts`, `checkout_attempts` table), the same pattern the inquiry API's
+  rate limiter uses. Over the limit: the pay host renders a branded `429` page, the portal answers
+  `429 { "error": "too_many_attempts", "retryAfterSeconds": 600 }`; both set `Retry-After`. Only
+  the checkout POST counts — page views never do. No CAPTCHA (e.g. Turnstile) is used here: the
+  payment-link token's entropy already makes the link itself infeasible to brute force (see "Token
+  design" above), so this throttle only needs to slow down repeated attempts against a link or
+  member that is already known.
 - **Token-free Stripe round trip**: the `success_url` and `cancel_url` given to Stripe are
   `/checkout/complete` and `/checkout/cancel` with Stripe's `{CHECKOUT_SESSION_ID}` placeholder, on
   the origin the request arrived on. Those pages resolve the invoice through the Checkout Session

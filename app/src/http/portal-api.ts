@@ -6,6 +6,7 @@ import type { AuthEnv } from '../auth/middleware.ts';
 import { listServices } from '../domain/clients.ts';
 import { getInvoiceForClient, listInvoiceItems, listInvoicesForClient, outstandingBalanceCents } from '../domain/invoices.ts';
 import { listPaymentsForInvoice, startCheckout } from '../domain/payments.ts';
+import { allowCheckoutAttempt, checkoutAttemptWindowSeconds } from '../domain/throttle.ts';
 import type { InvoiceStatus } from '../domain/models.ts';
 
 function hasErrorCode(error: unknown, code: string): boolean {
@@ -105,9 +106,20 @@ export function createPortalApi(deps: AppDeps) {
   });
 
   api.post('/invoices/:id/checkout', async c => {
-    const { client } = c.var.auth;
+    const { client, membership } = c.var.auth;
     const invoice = await getInvoiceForClient(deps.db, client.id, c.req.param('id'));
     if (!invoice) return c.json({ error: 'not_found' }, 404);
+
+    // Only POST checkout attempts count, keyed per member; page views never touch this. No CAPTCHA —
+    // see app/README.md.
+    const allowed = await allowCheckoutAttempt(deps.db, deps.now(), `member:${membership.id}`);
+    if (!allowed) {
+      return c.json(
+        { error: 'too_many_attempts', retryAfterSeconds: checkoutAttemptWindowSeconds },
+        429,
+        { 'Retry-After': String(checkoutAttemptWindowSeconds) },
+      );
+    }
 
     // The origin the caller actually reached us on, so the dev port survives the Stripe round trip
     // — the same technique the pay host uses for its own return urls.

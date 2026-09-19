@@ -47,6 +47,14 @@ async function payments(deps: AppDeps): Promise<PaymentRow[]> {
   return (await deps.db.prepare('SELECT id, source, payment_link_id FROM payments').all<PaymentRow>()).results;
 }
 
+// Lets the checkout-throttle window-expiry test advance time independently of the fixed clock the
+// other tests in this file use.
+function clockedDeps(): { deps: AppDeps; advance: (seconds: number) => void } {
+  let clock = 1_700_000_000;
+  const deps = testDeps({ now: () => clock });
+  return { deps, advance: (seconds: number) => { clock += seconds; } };
+}
+
 // A payment-link checkout taken all the way through the pay host, so the return routes have a real
 // Stripe session id to resolve.
 async function startLinkCheckout(deps: AppDeps): Promise<{ invoice: Invoice; token: string; sessionId: string }> {
@@ -295,6 +303,74 @@ test('checkout returns 409 with the in-progress page when Stripe cannot expire t
   assert.equal(response.headers.get('Content-Type'), 'text/html; charset=utf-8');
   assert.match(body, /A payment for this invoice is already in progress\. Please check back shortly\./);
   assert.equal((await payments(deps)).length, 1);
+});
+
+test('an 11th checkout POST against the same payment link is throttled with 429 and makes no further gateway call', async () => {
+  const { deps } = clockedDeps();
+  const stripe = deps.stripe as FakeStripe;
+  const app = createApp(deps);
+  const { token } = await seedOpenInvoiceLink(deps);
+
+  for (let i = 0; i < 10; i++) {
+    const response = await app.fetch(new Request(payUrl(`/i/${token}/checkout`), { method: 'POST' }));
+    assert.equal(response.status, 303);
+  }
+  const callsBeforeEleventh = stripe.calls.length;
+
+  const eleventh = await app.fetch(new Request(payUrl(`/i/${token}/checkout`), { method: 'POST' }));
+  const body = await eleventh.text();
+
+  assert.equal(eleventh.status, 429);
+  assert.equal(eleventh.headers.get('Retry-After'), '600');
+  assert.equal(eleventh.headers.get('Content-Type'), 'text/html; charset=utf-8');
+  assert.match(body, /Too many payment attempts\. Please wait a few minutes and try again\./);
+  assert.equal(stripe.calls.length, callsBeforeEleventh);
+});
+
+test('checkout access for a payment link is restored once the throttle window expires', async () => {
+  const { deps, advance } = clockedDeps();
+  const app = createApp(deps);
+  const { token } = await seedOpenInvoiceLink(deps);
+
+  for (let i = 0; i < 10; i++) {
+    await app.fetch(new Request(payUrl(`/i/${token}/checkout`), { method: 'POST' }));
+  }
+  const blocked = await app.fetch(new Request(payUrl(`/i/${token}/checkout`), { method: 'POST' }));
+  assert.equal(blocked.status, 429);
+
+  advance(601);
+
+  const restored = await app.fetch(new Request(payUrl(`/i/${token}/checkout`), { method: 'POST' }));
+  assert.equal(restored.status, 303);
+});
+
+test('checkout throttle counters are per payment link; another link is unaffected', async () => {
+  const { deps } = clockedDeps();
+  const app = createApp(deps);
+  const { token: tokenA } = await seedOpenInvoiceLink(deps);
+  const { token: tokenB } = await seedOpenInvoiceLink(deps);
+
+  for (let i = 0; i < 10; i++) {
+    await app.fetch(new Request(payUrl(`/i/${tokenA}/checkout`), { method: 'POST' }));
+  }
+  const blockedA = await app.fetch(new Request(payUrl(`/i/${tokenA}/checkout`), { method: 'POST' }));
+  assert.equal(blockedA.status, 429);
+
+  const responseB = await app.fetch(new Request(payUrl(`/i/${tokenB}/checkout`), { method: 'POST' }));
+  assert.equal(responseB.status, 303);
+});
+
+test('GET page views do not count toward the checkout throttle', async () => {
+  const { deps } = clockedDeps();
+  const app = createApp(deps);
+  const { token } = await seedOpenInvoiceLink(deps);
+
+  for (let i = 0; i < 20; i++) {
+    const response = await app.fetch(new Request(payUrl(`/i/${token}`)));
+    assert.equal(response.status, 200);
+  }
+  const response = await app.fetch(new Request(payUrl(`/i/${token}/checkout`), { method: 'POST' }));
+  assert.equal(response.status, 303);
 });
 
 test('the checkout return urls carry the session id, never the payment-link token', async () => {

@@ -16,12 +16,13 @@ function invoice(sql: DatabaseSync, clientId: string, id = 'inv-1'): string {
   return id;
 }
 
-test('all ten tables exist after migration', () => {
+test('all eleven tables exist after migration', () => {
   const { sql } = database();
   const tables = sql.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all()
     .map((row: any) => row.name as string);
   assert.deepEqual(tables, [
     'audit_events',
+    'checkout_attempts',
     'clients',
     'invoice_items',
     'invoices',

@@ -208,6 +208,16 @@ export function notFoundPage(kind: NotFoundKind = 'invoice-link'): string {
   return layout({ title: 'Page not found', body });
 }
 
+export function tooManyAttemptsPage(): string {
+  const body = `${wordmark()}
+<main>
+<h1>Too many payment attempts</h1>
+<p>Too many payment attempts. Please wait a few minutes and try again.</p>
+<p>Questions? Email <a href="mailto:eldritch@mnlith.dev">eldritch@mnlith.dev</a>.</p>
+</main>`;
+  return layout({ title: 'Too many payment attempts', body });
+}
+
 export function unavailablePage(): string {
   const body = `${wordmark()}
 <main>
