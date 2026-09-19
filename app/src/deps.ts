@@ -50,6 +50,7 @@ export interface AppDeps {
   stripe: StripeGateway;
   webhooks: WebhookVerifier;
   now(): number; // unix seconds
+  sleep(ms: number): Promise<void>; // only used to wait out a checkout claim another request won
   randomBytes(length: number): Uint8Array;
   logError(event: string, error: unknown): void; // never logs personal data or tokens
 }

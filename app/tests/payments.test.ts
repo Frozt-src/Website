@@ -4,9 +4,9 @@ import assert from 'node:assert/strict';
 import { createApp } from '../src/app.ts';
 import { createPaymentLink } from '../src/domain/payment-links.ts';
 import { startCheckout, applyStripeEvent, invoiceForPaymentLinkSession } from '../src/domain/payments.ts';
-import { testDeps, payUrl, portalUrl, FakeStripe } from './helpers/app.ts';
+import { testDeps, payUrl, portalUrl, DeferredStripe, FakeSleep, FakeStripe } from './helpers/app.ts';
 import { seedClient, seedInvoice } from './helpers/fixtures.ts';
-import type { AppDeps, StripeEvent } from '../src/deps.ts';
+import type { AppDeps, StripeEvent, StripeGateway } from '../src/deps.ts';
 import type { Client, Invoice, InvoiceStatus, Payment } from '../src/domain/models.ts';
 
 const successUrl = 'https://pay.test/i/the-token/complete';
@@ -20,6 +20,7 @@ interface PaymentStateRow {
   payment_link_id: string | null;
   stripe_checkout_session_id: string;
   stripe_payment_intent_id: string | null;
+  checkout_url: string | null;
   method: string | null;
   amount_cents: number;
   currency: string;
@@ -82,6 +83,10 @@ function paidSession(payment: Payment, overrides: Record<string, unknown> = {}):
 
 function payment(deps: AppDeps, id: string): Promise<PaymentStateRow | null> {
   return deps.db.prepare('SELECT * FROM payments WHERE id = ?').bind(id).first<PaymentStateRow>();
+}
+// The rows the single-open-checkout invariant is about: at most one of these per invoice.
+async function openPayments(deps: AppDeps): Promise<PaymentStateRow[]> {
+  return (await deps.db.prepare(`SELECT * FROM payments WHERE status IN ('pending', 'processing')`).all<PaymentStateRow>()).results;
 }
 function invoice(deps: AppDeps, id: string): Promise<InvoiceStateRow | null> {
   return deps.db.prepare('SELECT status, paid_at FROM invoices WHERE id = ?').bind(id).first<InvoiceStateRow>();
@@ -241,6 +246,120 @@ test('startCheckout opens a new session and cancels the old payment once the ses
   assert.notEqual(second.url, first.url);
   assert.equal((await payment(deps, first.payment.id))?.status, 'canceled');
   assert.equal((await payment(deps, second.payment.id))?.status, 'pending');
+});
+
+// The gateway hangs until the test releases it, so the second call is guaranteed to land while the
+// first is still at Stripe: the database index, not luck, decides which one opens the session.
+function concurrent() {
+  const stripe = new DeferredStripe();
+  const sleeps = new FakeSleep();
+  return { deps: testDeps({ stripe, sleep: sleeps.sleep }), stripe, sleeps };
+}
+
+test('two concurrent checkouts for the same invoice open one Stripe session and share its url', async () => {
+  const { deps, stripe, sleeps } = concurrent();
+  const { client, invoice: open } = await seedPayable(deps);
+  const input = { invoice: open, client, source: 'portal' as const, successUrl, cancelUrl };
+
+  const both = Promise.all([startCheckout(deps.db, deps, input), startCheckout(deps.db, deps, input)]);
+  await stripe.calledOnce;
+  stripe.resume();
+  const [first, second] = await both;
+
+  assert.equal(stripe.calls.length, 1);
+  assert.equal(first.url, 'https://checkout.stripe.com/c/pay/cs_test_00000001');
+  assert.equal(second.url, first.url);
+  assert.equal(second.payment.id, first.payment.id);
+  // The request that lost the claim waited for the winner's url instead of opening its own.
+  assert.deepEqual(sleeps.calls, [150]);
+  const rows = await openPayments(deps);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].stripe_checkout_session_id, 'cs_test_00000001');
+});
+
+test('a checkout arriving while another is still at Stripe waits for it instead of taking the claim', async () => {
+  const { deps, stripe, sleeps } = concurrent();
+  const { client, invoice: open } = await seedPayable(deps);
+  const input = { invoice: open, client, source: 'portal' as const, successUrl, cancelUrl };
+
+  const first = startCheckout(deps.db, deps, input);
+  await stripe.calledOnce;
+  // The claim is already in the database; the url only arrives when Stripe answers.
+  const claimed = await openPayments(deps);
+  assert.equal(claimed.length, 1);
+  assert.equal(claimed[0].checkout_url, null);
+
+  const second = startCheckout(deps.db, deps, input);
+  stripe.resume();
+  const [a, b] = await Promise.all([first, second]);
+
+  // The claim in flight must not be cancelled and replaced: that is a second live session.
+  assert.equal(stripe.calls.length, 1);
+  assert.equal(b.url, a.url);
+  assert.equal(b.payment.id, a.payment.id);
+  assert.deepEqual(sleeps.calls, [150]);
+  const rows = await openPayments(deps);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, 'pending');
+});
+
+test('a concurrent checkout from the other source loses the claim and reports payment_in_progress', async () => {
+  const { deps, stripe, sleeps } = concurrent();
+  const { client, invoice: open } = await seedPayable(deps);
+  const base = { invoice: open, client, successUrl, cancelUrl };
+
+  const both = Promise.allSettled([
+    startCheckout(deps.db, deps, { ...base, source: 'portal' }),
+    startCheckout(deps.db, deps, { ...base, source: 'payment_link' }),
+  ]);
+  await stripe.calledOnce;
+  stripe.resume();
+  const [winner, loser] = await both;
+
+  assert.equal(winner.status, 'fulfilled');
+  assert.equal(loser.status, 'rejected');
+  assert.equal((loser as PromiseRejectedResult).reason.code, 'payment_in_progress');
+  assert.equal(stripe.calls.length, 1);
+  // The loser never saw a session to replace, so it expired nothing: it simply lost the claim.
+  assert.deepEqual(stripe.expired, []);
+  assert.ok(sleeps.calls.length >= 1, 'the loser waited for the winner');
+  const rows = await openPayments(deps);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].source, 'portal');
+});
+
+test('a Stripe failure cancels the claim so the next checkout for the invoice succeeds', async () => {
+  const fake = new FakeStripe();
+  let fail = true;
+  const stripe: StripeGateway = {
+    createCheckoutSession: async input => {
+      if (fail) {
+        fail = false;
+        throw new Error('stripe refused the session');
+      }
+      return fake.createCheckoutSession(input);
+    },
+    expireCheckoutSession: sessionId => fake.expireCheckoutSession(sessionId),
+  };
+  const deps = testDeps({ stripe });
+  const { client, invoice: open } = await seedPayable(deps);
+  const input = { invoice: open, client, source: 'portal' as const, successUrl, cancelUrl };
+
+  await assert.rejects(() => startCheckout(deps.db, deps, input), /stripe refused the session/);
+
+  const claimed = await deps.db.prepare('SELECT * FROM payments').all<PaymentStateRow>();
+  assert.equal(claimed.results.length, 1);
+  assert.equal(claimed.results[0].status, 'canceled');
+  assert.equal(claimed.results[0].failed_at, deps.now());
+  assert.equal(claimed.results[0].checkout_url, null);
+  assert.equal((await openPayments(deps)).length, 0);
+
+  const retry = await startCheckout(deps.db, deps, input);
+
+  assert.equal(retry.url, 'https://checkout.stripe.com/c/pay/cs_test_00000001');
+  const rows = await openPayments(deps);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, retry.payment.id);
 });
 
 for (const status of ['processing', 'paid', 'void', 'draft'] as InvoiceStatus[]) {

@@ -88,6 +88,7 @@ function toDeps(env: Env): AppDeps {
     stripe: stripeFor(env),
     webhooks: webhooksFor(env),
     now: () => Math.floor(Date.now() / 1000),
+    sleep: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
     randomBytes: (length: number) => crypto.getRandomValues(new Uint8Array(length)),
     logError,
   };

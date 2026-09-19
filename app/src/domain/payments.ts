@@ -12,6 +12,9 @@ const sessionLifetimeSeconds = 1800;
 // call, and our timestamp is already a round trip old by then. Ask Stripe for slightly longer than
 // we store, so our reuse window is the one that closes first.
 const gatewayExpiryCushionSeconds = 30;
+// How long a request that lost the claim waits for the winner's checkout url before giving up.
+const claimPollDelayMs = 150;
+const claimPollAttempts = 10;
 
 const handledTypes = new Set([
   'checkout.session.completed',
@@ -81,28 +84,68 @@ export interface StartCheckoutInput {
   cancelUrl: string;
 }
 
+interface CheckoutDeps {
+  now(): number;
+  sleep(ms: number): Promise<void>;
+  stripe: StripeGateway;
+  logError(event: string, error: unknown): void;
+}
+
+// The payment still holding the invoice, if any. The `payments_one_open` index makes this at most
+// one row, which is what lets a checkout claim the invoice by inserting rather than by locking.
+function openPayment(db: D1Database, invoiceId: string): Promise<PaymentRow | null> {
+  return db
+    .prepare(`SELECT * FROM payments WHERE invoice_id = ? AND status IN ('pending', 'processing') ORDER BY created_at DESC`)
+    .bind(invoiceId)
+    .first<PaymentRow>();
+}
+
+// Both D1 and SQLite name the broken constraint in the error message. The claim batch can only
+// break `payments_one_open`: its placeholder session id is derived from a fresh payment id.
+function claimLost(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('UNIQUE constraint failed');
+}
+
+// The claim is taken before Stripe is called, so the winner's row exists with no url for as long as
+// the Stripe round trip lasts. A request that lost the claim waits for that url rather than opening
+// a second live session for the same invoice.
+async function urlFromClaimWinner(
+  db: D1Database,
+  deps: CheckoutDeps,
+  input: StartCheckoutInput,
+): Promise<{ url: string; payment: Payment }> {
+  for (let attempt = 0; attempt < claimPollAttempts; attempt++) {
+    await deps.sleep(claimPollDelayMs);
+    const winner = await openPayment(db, input.invoice.id);
+    if (!winner?.checkout_url) continue;
+    // The winner's session returns the payer to its own channel's urls, so it is only shareable
+    // with a request from that same channel.
+    if (winner.source !== input.source) throw paymentInProgress();
+    return { url: winner.checkout_url, payment: toPayment(winner) };
+  }
+  throw paymentInProgress();
+}
+
 export async function startCheckout(
   db: D1Database,
-  deps: { now(): number; stripe: StripeGateway; logError(event: string, error: unknown): void },
+  deps: CheckoutDeps,
   input: StartCheckoutInput,
 ): Promise<{ url: string; payment: Payment }> {
   if (input.invoice.status !== 'open') throw invoiceNotPayable();
   const at = deps.now();
 
-  const pending = await db
-    .prepare(`SELECT * FROM payments WHERE invoice_id = ? AND status = 'pending' ORDER BY created_at DESC`)
-    .bind(input.invoice.id)
-    .first<PaymentRow>();
+  const open = await openPayment(db, input.invoice.id);
+  const expired = open !== null && open.session_expires_at <= at;
   // A live session is only reusable by the channel that created it: the two channels send the payer
   // to different return urls, and the payment row records the channel the money came through.
-  const liveUrl = pending && pending.session_expires_at > at ? pending.checkout_url : null;
-  if (pending && liveUrl) {
-    if (pending.source === input.source) return { url: liveUrl, payment: toPayment(pending) };
+  const liveUrl = open && !expired ? open.checkout_url : null;
+  if (open && liveUrl) {
+    if (open.source === input.source) return { url: liveUrl, payment: toPayment(open) };
     // The other channel's session is still payable at Stripe, so close it before opening ours. If
     // Stripe refuses (e.g. the session already completed and can no longer be expired), a payment is
     // genuinely in flight: report that instead of opening a second live session for the same invoice.
     try {
-      await deps.stripe.expireCheckoutSession(pending.stripe_checkout_session_id);
+      await deps.stripe.expireCheckoutSession(open.stripe_checkout_session_id);
     } catch (error) {
       deps.logError('checkout_expire_failed', error);
       throw paymentInProgress();
@@ -111,29 +154,17 @@ export async function startCheckout(
 
   const paymentId = newId();
   const expiresAt = at + sessionLifetimeSeconds;
-  const session = await deps.stripe.createCheckoutSession({
-    idempotencyKey: paymentId,
-    invoiceId: input.invoice.id,
-    invoiceNumber: input.invoice.number,
-    paymentId,
-    description: input.invoice.description,
-    amountCents: input.invoice.totalCents,
-    currency: input.invoice.currency,
-    customerEmail: input.client.billingEmail,
-    successUrl: input.successUrl,
-    cancelUrl: input.cancelUrl,
-    expiresAt: expiresAt + gatewayExpiryCushionSeconds,
-  });
-
-  const row: PaymentRow = {
+  const claim: PaymentRow = {
     id: paymentId,
     invoice_id: input.invoice.id,
     client_id: input.invoice.clientId,
     payment_link_id: input.paymentLinkId ?? null,
     source: input.source,
-    stripe_checkout_session_id: session.id,
+    // A placeholder until Stripe answers: the column is NOT NULL UNIQUE, and no Stripe session id
+    // can ever look like this, so the webhook state machine never matches an unfinished claim.
+    stripe_checkout_session_id: `claim:${paymentId}`,
     stripe_payment_intent_id: null,
-    checkout_url: session.url,
+    checkout_url: null,
     amount_cents: input.invoice.totalCents,
     currency: input.invoice.currency,
     method: null,
@@ -146,12 +177,16 @@ export async function startCheckout(
   };
 
   const statements: D1PreparedStatement[] = [];
-  // The stale session is cancelled in the same batch that opens its replacement.
-  if (pending) {
+  // The stale session is cancelled in the same batch that claims the invoice for its replacement.
+  // Statements in a batch run in order inside one transaction, so the cancellation has already
+  // freed the index by the time the insert below is checked against it. An unexpired row with no
+  // url yet is a claim another request is still at Stripe with, and is never cancelled: leaving it
+  // in place is what makes the insert below fail and this request wait for that request's url.
+  if (open && (expired || liveUrl)) {
     statements.push(
       db
         .prepare(`UPDATE payments SET status = 'canceled', updated_at = ? WHERE id = ? AND status = 'pending'`)
-        .bind(at, pending.id),
+        .bind(at, open.id),
     );
   }
   statements.push(
@@ -160,31 +195,67 @@ export async function startCheckout(
         checkout_url, amount_cents, currency, status, session_expires_at, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`)
       .bind(
-        row.id,
-        row.invoice_id,
-        row.client_id,
-        row.payment_link_id,
-        row.source,
-        row.stripe_checkout_session_id,
-        row.checkout_url,
-        row.amount_cents,
-        row.currency,
-        row.session_expires_at,
-        row.created_at,
-        row.updated_at,
+        claim.id,
+        claim.invoice_id,
+        claim.client_id,
+        claim.payment_link_id,
+        claim.source,
+        claim.stripe_checkout_session_id,
+        claim.checkout_url,
+        claim.amount_cents,
+        claim.currency,
+        claim.session_expires_at,
+        claim.created_at,
+        claim.updated_at,
       ),
     auditStatement(db, {
       occurredAt: at,
       actorType: 'system',
       actorId: null,
-      clientId: row.client_id,
+      clientId: claim.client_id,
       entityType: 'payment',
-      entityId: row.id,
+      entityId: claim.id,
       action: 'checkout.created',
-      detailsJson: JSON.stringify({ invoiceId: row.invoice_id, source: row.source, amountCents: row.amount_cents }),
+      detailsJson: JSON.stringify({ invoiceId: claim.invoice_id, source: claim.source, amountCents: claim.amount_cents }),
     }),
   );
-  await db.batch(statements);
+  try {
+    await db.batch(statements);
+  } catch (error) {
+    if (!claimLost(error)) throw error;
+    return urlFromClaimWinner(db, deps, input);
+  }
+
+  let session: { id: string; url: string };
+  try {
+    session = await deps.stripe.createCheckoutSession({
+      idempotencyKey: paymentId,
+      invoiceId: input.invoice.id,
+      invoiceNumber: input.invoice.number,
+      paymentId,
+      description: input.invoice.description,
+      amountCents: input.invoice.totalCents,
+      currency: input.invoice.currency,
+      customerEmail: input.client.billingEmail,
+      successUrl: input.successUrl,
+      cancelUrl: input.cancelUrl,
+      expiresAt: expiresAt + gatewayExpiryCushionSeconds,
+    });
+  } catch (error) {
+    // No session exists, so the claim must be released or the invoice stays unpayable until the
+    // row expires. Cancelling it frees the index for the next attempt.
+    await db
+      .prepare(`UPDATE payments SET status = 'canceled', failed_at = ?, updated_at = ? WHERE id = ?`)
+      .bind(at, at, paymentId)
+      .run();
+    throw error;
+  }
+
+  const row: PaymentRow = { ...claim, stripe_checkout_session_id: session.id, checkout_url: session.url };
+  await db
+    .prepare(`UPDATE payments SET stripe_checkout_session_id = ?, checkout_url = ?, updated_at = ? WHERE id = ? AND status = 'pending'`)
+    .bind(row.stripe_checkout_session_id, row.checkout_url, at, row.id)
+    .run();
 
   return { url: session.url, payment: toPayment(row) };
 }

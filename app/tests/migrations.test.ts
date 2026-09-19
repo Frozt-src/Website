@@ -70,6 +70,24 @@ test('invoice item amounts must equal quantity times unit price', () => {
   sql.close();
 });
 
+test('only one open payment per invoice is allowed', () => {
+  const { sql } = database();
+  const clientId = client(sql);
+  const invoiceId = invoice(sql, clientId);
+  const openPayment = (id: string, sessionId: string, status: string) =>
+    sql.prepare(`INSERT INTO payments (id, invoice_id, client_id, source, stripe_checkout_session_id, amount_cents, status, session_expires_at, created_at, updated_at)
+      VALUES (?, ?, ?, 'portal', ?, 0, ?, 1, 1, 1)`).run(id, invoiceId, clientId, sessionId, status);
+
+  openPayment('pay-1', 'cs_1', 'pending');
+  assert.throws(() => openPayment('pay-2', 'cs_2', 'pending'), /UNIQUE constraint failed/);
+  assert.throws(() => openPayment('pay-2', 'cs_2', 'processing'), /UNIQUE constraint failed/);
+
+  // A settled or cancelled payment no longer holds the invoice, so a new checkout can open.
+  sql.prepare(`UPDATE payments SET status = 'canceled' WHERE id = ?`).run('pay-1');
+  openPayment('pay-2', 'cs_2', 'pending');
+  sql.close();
+});
+
 test('a payment referencing an unknown invoice is rejected by the foreign key', () => {
   const { sql } = database();
   const clientId = client(sql);

@@ -59,6 +59,39 @@ export class FakeStripe implements StripeGateway {
   }
 }
 
+// A gateway that hangs inside createCheckoutSession until the test releases it, so a concurrent
+// checkout is guaranteed to arrive while the first one is still waiting on Stripe.
+export class DeferredStripe extends FakeStripe {
+  private readonly released: Promise<void>;
+  // Resolves the moment the gateway is first called, so the test can act at that exact point.
+  readonly calledOnce: Promise<void>;
+  private release = () => {};
+  private called = () => {};
+  constructor() {
+    super();
+    this.released = new Promise<void>(resolve => { this.release = resolve; });
+    this.calledOnce = new Promise<void>(resolve => { this.called = resolve; });
+  }
+  override async createCheckoutSession(input: CheckoutSessionInput): Promise<{ id: string; url: string }> {
+    this.called();
+    await this.released;
+    return super.createCheckoutSession(input);
+  }
+  resume(): void {
+    this.release();
+  }
+}
+
+// Zero delay, but a real macrotask: everything already queued runs to completion before the sleeper
+// looks again, which is what makes the concurrent checkout test deterministic.
+export class FakeSleep {
+  calls: number[] = [];
+  sleep = async (ms: number): Promise<void> => {
+    this.calls.push(ms);
+    await new Promise(resolve => setTimeout(resolve, 0));
+  };
+}
+
 export class FakeWebhooks implements WebhookVerifier {
   async verify(payload: string, signatureHeader: string): Promise<StripeEvent> {
     if (signatureHeader !== 'valid') throw new Error('invalid signature');
@@ -81,6 +114,7 @@ export function testDeps(overrides: Partial<AppDeps> = {}): AppDeps {
     stripe: new FakeStripe(),
     webhooks: new FakeWebhooks(),
     now: () => clock,
+    sleep: new FakeSleep().sleep,
     randomBytes: (length: number) => {
       const bytes = new Uint8Array(length);
       for (let i = 0; i < length; i++) bytes[i] = seed++ % 256;

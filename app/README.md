@@ -151,6 +151,14 @@ Checkout Session):
 | `pending` / `processing` | `checkout.session.async_payment_failed` | `failed` |
 | `pending` | `checkout.session.expired`, or superseded by a new Checkout Session for the same invoice | `canceled` |
 
+**At most one payment row per invoice is `pending` or `processing`**, enforced by the partial unique
+index `payments_one_open`, so one invoice can never have two live Checkout Sessions. A checkout
+claims the invoice by inserting its row (session id `claim:<payment id>`, no url) in the same batch
+that cancels the session it replaces, and only then calls Stripe. Two concurrent requests race on
+that insert: the one that loses waits for the winner's url and returns it when both came through the
+same channel, and reports `payment_in_progress` when they did not. A Stripe call that fails cancels
+the claim, so the next attempt can take it.
+
 `canceled` is a legal source state for a settlement because a session this Worker replaced stays
 payable at Stripe for a short cushion; a payment Stripe actually charged is always recorded, with
 its payment intent. An invoice transition only fires when the payment row reached the matching
