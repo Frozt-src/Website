@@ -13,7 +13,7 @@
     "deploy": "npm test && npm run build && wrangler deploy",
     "deploy:check": "npm run build && wrangler deploy --dry-run",
     "verify:site": "node scripts/verify-site.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p api/tsconfig.json && tsc --noEmit -p app/tsconfig.json && tsc --noEmit -p app/portal/tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p api/tsconfig.json && tsc --noEmit -p app/tsconfig.json && tsc --noEmit -p app/portal/tsconfig.json && tsc --noEmit -p app/tests/tsconfig.json",
     "test": "node --test api/tests/*.test.ts app/tests/*.test.ts",
     "test:watch": "node --test --watch api/tests/*.test.ts app/tests/*.test.ts",
     "api:dev": "wrangler dev --config api/wrangler.jsonc",

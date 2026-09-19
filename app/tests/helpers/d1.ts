@@ -1,7 +1,7 @@
 // Real SQLite executes the real migration files; the adapter replaces only the remote D1 transport.
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, readdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
 import { join } from 'node:path';
 
 const migrationsDir = fileURLToPath(new URL('../../migrations/', import.meta.url));

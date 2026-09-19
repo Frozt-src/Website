@@ -112,7 +112,7 @@ test('first login binds the invited membership and audits it', async () => {
 
   const response = await get(app, '/api/me', 'token');
   assert.equal(response.status, 200);
-  const body = await response.json();
+  const body = await response.json() as any;
   assert.equal(body.user.id, 'user_1');
   assert.equal(body.client.id, client.id);
   assert.equal(body.client.name, 'Alex Industries');
@@ -161,7 +161,7 @@ test('membership binding matches the email case-insensitively', async () => {
 
   const response = await get(app, '/api/me', 'token');
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).membership.id, membershipId);
+  assert.equal((await response.json() as any).membership.id, membershipId);
 });
 
 test('concurrent first logins both resolve the one invited membership', async () => {
@@ -239,7 +239,7 @@ test('balanceCents in /api/me is the outstanding balance', async () => {
 
   const response = await get(app, '/api/me', 'token');
   assert.equal(response.status, 200);
-  const body = await response.json();
+  const body = await response.json() as any;
   assert.equal(body.balanceCents, 15000);
   assert.equal(body.balanceCents, await outstandingBalanceCents(deps.db, client.id));
 });
@@ -274,7 +274,7 @@ test('services list only the services of the caller client', async () => {
 
   const response = await get(app, '/api/services', 'token');
   assert.equal(response.status, 200);
-  const body = await response.json();
+  const body = await response.json() as any;
   assert.deepEqual(body.services.map((service: { name: string }) => service.name), ['Managed backups']);
   assert.equal(body.services[0].status, 'active');
 });
